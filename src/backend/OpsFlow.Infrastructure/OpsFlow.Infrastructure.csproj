@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\OpsFlow.Application\OpsFlow.Application.csproj" />
+    <ProjectReference Include="..\OpsFlow.Domain\OpsFlow.Domain.csproj" />
+  </ItemGroup>
+</Project>

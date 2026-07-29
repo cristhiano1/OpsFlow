@@ -1,0 +1,68 @@
+# ---- .NET ----
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+[Ll]og/
+[Ll]ogs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.userprefs
+.vs/
+.vscode/
+.idea/
+*.swp
+*.pdb
+*.dll.config
+publish/
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
+*.trx
+
+# ---- Rider / VS ----
+.idea/
+*.DotSettings.user
+
+# ---- Node / React ----
+node_modules/
+dist/
+build/
+.vite/
+.turbo/
+.next/
+.parcel-cache/
+.eslintcache
+*.tsbuildinfo
+
+# ---- Playwright ----
+playwright-report/
+test-results/
+playwright/.cache/
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- Env / secrets ----
+.env
+.env.*
+!.env.example
+appsettings.*.local.json
+secrets.json
+**/wwwroot/uploads/
+storage/local-files/
+
+# ---- Docker ----
+**/.docker-data/
+
+# ---- Claude Code (local machine settings only; reusable project instructions may live in .claude/) ----
+.claude/settings.local.json
+
+# ---- Misc ----
+*.log
+*.bak
+*.tmp

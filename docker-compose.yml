@@ -1,0 +1,45 @@
+# =============================================================================
+# OpsFlow — local development infrastructure (Phase 0)
+#
+# Phase 0 provides only the database engine required to develop against a real
+# SQL Server instance. Application, frontend, Mailpit and background services
+# are introduced in later phases.
+#
+# Usage (from the repository root):
+#   docker compose --env-file .env.example up -d sqlserver
+#   docker compose --env-file .env.example down        # keeps the data volume
+#
+# The SA password is never hardcoded here; it is read from the environment
+# (see .env.example / your local .env).
+# =============================================================================
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: opsflow-sqlserver
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: "Developer"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:?MSSQL_SA_PASSWORD must be set (see .env.example)}"
+    ports:
+      - "${MSSQL_PORT:-1433}:1433"
+    volumes:
+      - opsflow-sql-data:/var/opt/mssql
+    healthcheck:
+      # sqlcmd 18 ships in the 2022 image at /opt/mssql-tools18/bin.
+      # The password is passed through the SQLCMDPASSWORD environment variable
+      # rather than the -P flag, so it never appears in the container's process
+      # list. $$ escapes the variable so Compose passes it literally and the
+      # shell inside the container expands it against the container's environment.
+      # -C trusts the server's self-signed development certificate.
+      test:
+        - "CMD-SHELL"
+        - "SQLCMDPASSWORD=\"$$MSSQL_SA_PASSWORD\" /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -Q \"SELECT 1\" -b -o /dev/null"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  opsflow-sql-data:
+    name: opsflow-sql-data
