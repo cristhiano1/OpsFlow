@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using OpsFlow.Api.Authentication;
 using OpsFlow.Infrastructure;
 using OpsFlow.Infrastructure.Configuration;
 using OpsFlow.Infrastructure.Persistence;
@@ -9,6 +10,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 builder.Services.AddOpsFlowInfrastructure(builder.Configuration);
+builder.Services.AddOpsFlowAuthentication();
 
 var app = builder.Build();
 
@@ -21,6 +23,7 @@ if (!app.Environment.IsDevelopment())
     app.UseHttpsRedirection();
 }
 
+app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 

@@ -2,9 +2,15 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
     <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" />
+    <PackageReference Include="Microsoft.IdentityModel.Tokens" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\OpsFlow.Application\OpsFlow.Application.csproj" />
     <ProjectReference Include="..\OpsFlow.Domain\OpsFlow.Domain.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Exposes internal authentication/crypto types to the infrastructure unit tests only. -->
+    <InternalsVisibleTo Include="OpsFlow.Infrastructure.UnitTests" />
   </ItemGroup>
 </Project>
