@@ -1,4 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <UserSecretsId>opsflow-api-local-dev</UserSecretsId>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\OpsFlow.Application\OpsFlow.Application.csproj" />
     <ProjectReference Include="..\OpsFlow.Contracts\OpsFlow.Contracts.csproj" />

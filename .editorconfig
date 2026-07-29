@@ -74,3 +74,29 @@ csharp_style_namespace_declarations = file_scoped:warning
 dotnet_analyzer_diagnostic.category-Style.severity = warning
 dotnet_analyzer_diagnostic.category-Design.severity = warning
 dotnet_analyzer_diagnostic.category-Naming.severity = warning
+
+# EF Core migrations and the model snapshot are generated code; exclude them
+# from code-style analysis so generator output does not fail the strict build.
+[**/Migrations/*.cs]
+generated_code = true
+
+# IDE0058 ("expression value is never used") and IDE0290 ("use primary
+# constructor") are relaxed only for the specific files that use idiomatic
+# infrastructure wiring (EF Core fluent configuration, DI chains, DbSet.Add)
+# or keep explicit constructors, rather than repository-wide.
+[src/backend/OpsFlow.Infrastructure/Persistence/Configurations/*.cs]
+dotnet_diagnostic.IDE0058.severity = none
+
+[src/backend/OpsFlow.Infrastructure/Persistence/OpsFlowDbContext.cs]
+dotnet_diagnostic.IDE0058.severity = none
+dotnet_diagnostic.IDE0290.severity = none
+
+[src/backend/OpsFlow.Infrastructure/InfrastructureServiceCollectionExtensions.cs]
+dotnet_diagnostic.IDE0058.severity = none
+
+[src/backend/OpsFlow.Infrastructure/Seeding/DevelopmentDataSeeder.cs]
+dotnet_diagnostic.IDE0058.severity = none
+dotnet_diagnostic.IDE0290.severity = none
+
+[src/backend/OpsFlow.Api/Program.cs]
+dotnet_diagnostic.IDE0058.severity = none

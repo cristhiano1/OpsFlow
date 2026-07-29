@@ -1,0 +1,59 @@
+using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using OpsFlow.Application.Abstractions;
+using OpsFlow.Infrastructure.Configuration;
+using OpsFlow.Infrastructure.Identity;
+using OpsFlow.Infrastructure.Persistence;
+using OpsFlow.Infrastructure.Seeding;
+using OpsFlow.Infrastructure.Time;
+
+namespace OpsFlow.Infrastructure;
+
+/// <summary>Registration of OpsFlow infrastructure services (persistence, Identity, seeding).</summary>
+public static class InfrastructureServiceCollectionExtensions
+{
+    /// <summary>
+    /// Registers EF Core (SQL Server), ASP.NET Core Identity (Guid keys) and the
+    /// development seeding infrastructure. The connection string is read from
+    /// <c>ConnectionStrings:OpsFlow</c>.
+    /// </summary>
+    public static IServiceCollection AddOpsFlowInfrastructure(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        var connectionString = configuration.GetConnectionString("OpsFlow")
+            ?? throw new InvalidOperationException(
+                "Connection string 'ConnectionStrings:OpsFlow' is not configured. " +
+                "Set it via user secrets or environment variables.");
+
+        services.AddDbContext<OpsFlowDbContext>(options => options.UseSqlServer(connectionString));
+
+        services.AddIdentityCore<ApplicationUser>(options =>
+            {
+                options.User.RequireUniqueEmail = true;
+
+                options.Password.RequiredLength = 12;
+                options.Password.RequireDigit = true;
+                options.Password.RequireLowercase = true;
+                options.Password.RequireUppercase = true;
+                options.Password.RequireNonAlphanumeric = true;
+
+                options.Lockout.AllowedForNewUsers = true;
+                options.Lockout.MaxFailedAccessAttempts = 5;
+                options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
+
+                options.SignIn.RequireConfirmedAccount = false;
+            })
+            .AddRoles<IdentityRole<Guid>>()
+            .AddEntityFrameworkStores<OpsFlowDbContext>();
+
+        services.AddOptions<SeedOptions>().Bind(configuration.GetSection(SeedOptions.SectionName));
+
+        services.AddSingleton<IClock, SystemClock>();
+        services.AddScoped<DevelopmentDataSeeder>();
+
+        return services;
+    }
+}
