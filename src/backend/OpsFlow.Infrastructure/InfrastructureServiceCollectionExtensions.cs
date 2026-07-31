@@ -2,7 +2,10 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using OpsFlow.Application.Abstractions;
+using OpsFlow.Application.Authentication;
+using OpsFlow.Infrastructure.Authentication;
 using OpsFlow.Infrastructure.Configuration;
 using OpsFlow.Infrastructure.Identity;
 using OpsFlow.Infrastructure.Persistence;
@@ -54,6 +57,22 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IClock, SystemClock>();
         services.AddScoped<DevelopmentDataSeeder>();
 
+        AddAuthenticationFoundation(services, configuration);
+
         return services;
+    }
+
+    private static void AddAuthenticationFoundation(IServiceCollection services, IConfiguration configuration)
+    {
+        services.AddOptions<JwtOptions>()
+            .Bind(configuration.GetSection(JwtOptions.SectionName))
+            .ValidateOnStart();
+        services.AddSingleton<IValidateOptions<JwtOptions>, JwtOptionsValidator>();
+
+        // All of these are stateless and safe as singletons.
+        services.AddSingleton<JwtBearerTokenValidationParametersFactory>();
+        services.AddSingleton<IAccessTokenService, JwtAccessTokenService>();
+        services.AddSingleton<IRefreshTokenGenerator, RefreshTokenGenerator>();
+        services.AddSingleton<IRefreshTokenHasher, RefreshTokenHasher>();
     }
 }

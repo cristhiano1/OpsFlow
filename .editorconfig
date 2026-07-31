@@ -100,3 +100,6 @@ dotnet_diagnostic.IDE0290.severity = none
 
 [src/backend/OpsFlow.Api/Program.cs]
 dotnet_diagnostic.IDE0058.severity = none
+
+[src/backend/OpsFlow.Api/Authentication/AuthenticationServiceCollectionExtensions.cs]
+dotnet_diagnostic.IDE0058.severity = none

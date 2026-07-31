@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!-- Test-only conventions (this project is entirely test code):
+         CS1591 (no XML docs), CA1707 (underscores in test names),
+         CA2007 (unit tests have no synchronization context to deadwait on),
+         IDE1006 (async test methods do not use the "Async" suffix),
+         IDE0290 (test helpers use explicit constructors),
+         IDE0058 (Assert.Throws return value is intentionally discarded),
+         CA1861 (inline expected arrays in assertions). -->
+    <NoWarn>$(NoWarn);CS1591;CA1707;CA2007;IDE1006;IDE0290;IDE0058;CA1861</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="coverlet.collector" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\backend\OpsFlow.Infrastructure\OpsFlow.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>
