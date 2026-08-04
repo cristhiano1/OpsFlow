@@ -52,7 +52,10 @@ public sealed class LoginSessionIssuerTests
         Assert.Equal(AuthenticationStatus.Success, result.Status);
         var snapshot = result.User!;
         var request = new LoginSessionRequest(
-            snapshot.UserId, snapshot.OrganizationId, snapshot.SecurityStamp);
+            snapshot.UserId,
+            snapshot.OrganizationId,
+            snapshot.SecurityStamp,
+            snapshot.ConcurrencyStamp);
         return (snapshot, request);
     }
 
@@ -581,5 +584,83 @@ public sealed class LoginSessionIssuerTests
         Assert.Null(reread.LastLoginAt);
         Assert.False(await verify.RefreshTokens.AnyAsync(t => t.UserId == targetId));
         Assert.True(await verify.RefreshTokens.AnyAsync(t => t.UserId == blockerId));
+    }
+
+    // ---------------------------------------------------------------
+    // 16. Stale ExpectedConcurrencyStamp -> Rejected and no writes.
+    //     Proves the fix for GitHub finding #3: any Identity role /
+    //     password / lockout mutation via UserStore.UpdateAsync rotates
+    //     ConcurrencyStamp, so the pre-minted authenticated snapshot is
+    //     considered stale and no session state is persisted.
+    // ---------------------------------------------------------------
+    [Fact]
+    public async Task Stale_expected_concurrency_stamp_is_rejected_and_persists_no_writes()
+    {
+        await using var host = BuildHost(_fixture.ConnectionString);
+
+        using var scope = host.Services.CreateScope();
+        var org = await AuthenticationTestHost.SeedOrganizationAsync(scope.ServiceProvider);
+        var user = await AuthenticationTestHost.SeedUserAsync(
+            scope.ServiceProvider, org.Id, ValidPassword);
+
+        var (snapshot, _) = await AuthenticateAsync(scope.ServiceProvider, user.Email!);
+        var staleRequest = new LoginSessionRequest(
+            snapshot.UserId,
+            snapshot.OrganizationId,
+            snapshot.SecurityStamp,
+            ExpectedConcurrencyStamp: "stale-concurrency-stamp-value");
+
+        var issuer = scope.ServiceProvider.GetRequiredService<ILoginSessionIssuer>();
+        var result = await issuer.IssueAsync(staleRequest, CancellationToken.None);
+
+        Assert.Equal(SessionIssueStatus.Rejected, result.Status);
+        Assert.Null(result.RefreshToken);
+
+        await using var db = OpenReadContext();
+        var reread = await db.Users.AsNoTracking().SingleAsync(u => u.Id == user.Id);
+        Assert.Null(reread.LastLoginAt);
+        Assert.False(await db.RefreshTokens.AnyAsync(t => t.UserId == user.Id));
+    }
+
+    // ---------------------------------------------------------------
+    // 17. Successful issuance resets AccessFailedCount to 0 WITHOUT
+    //     rotating ConcurrencyStamp. Proves the direct tracked-property
+    //     assignment fix that lets concurrent successful logins from the
+    //     same authenticated snapshot both complete instead of
+    //     self-invalidating each other.
+    // ---------------------------------------------------------------
+    [Fact]
+    public async Task Successful_issuance_resets_access_failed_count_without_rotating_concurrency_stamp()
+    {
+        await using var host = BuildHost(_fixture.ConnectionString);
+
+        Guid userId;
+        string preIssueConcurrencyStamp;
+        using (var scope = host.Services.CreateScope())
+        {
+            var org = await AuthenticationTestHost.SeedOrganizationAsync(scope.ServiceProvider);
+            var user = await AuthenticationTestHost.SeedUserAsync(
+                scope.ServiceProvider, org.Id, ValidPassword);
+            userId = user.Id;
+
+            var authenticator = scope.ServiceProvider.GetRequiredService<IUserAuthenticator>();
+            _ = await authenticator.AuthenticateAsync(user.Email!, WrongPassword, CancellationToken.None);
+            _ = await authenticator.AuthenticateAsync(user.Email!, WrongPassword, CancellationToken.None);
+
+            var (snapshot, request) = await AuthenticateAsync(scope.ServiceProvider, user.Email!);
+            preIssueConcurrencyStamp = snapshot.ConcurrencyStamp;
+
+            var issuer = scope.ServiceProvider.GetRequiredService<ILoginSessionIssuer>();
+            var result = await issuer.IssueAsync(request, CancellationToken.None);
+            Assert.Equal(SessionIssueStatus.Issued, result.Status);
+        }
+
+        await using var db = OpenReadContext();
+        var reread = await db.Users.AsNoTracking().SingleAsync(u => u.Id == userId);
+        Assert.Equal(0, reread.AccessFailedCount);
+        Assert.Equal(
+            preIssueConcurrencyStamp,
+            reread.ConcurrencyStamp,
+            StringComparer.Ordinal);
     }
 }

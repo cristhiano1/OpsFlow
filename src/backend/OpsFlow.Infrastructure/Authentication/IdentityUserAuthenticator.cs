@@ -1,3 +1,4 @@
+using System.Data;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using OpsFlow.Application.Authentication;
@@ -17,6 +18,13 @@ namespace OpsFlow.Infrastructure.Authentication;
 /// Identity password-hash upgrade when the configured hasher returns
 /// <see cref="PasswordVerificationResult.SuccessRehashNeeded"/>; that secure
 /// framework behavior is intentionally preserved.
+/// </para>
+/// <para>
+/// Recording a failed access attempt happens inside a short serialized
+/// transaction that acquires a SQL Server UPDLOCK on the user row and reloads
+/// the tracked entity under that lock, so
+/// <see cref="UserManager{TUser}.AccessFailedAsync"/> cannot lose a
+/// concurrent increment to an Identity concurrency conflict.
 /// </para>
 /// </summary>
 internal sealed class IdentityUserAuthenticator : IUserAuthenticator
@@ -70,17 +78,7 @@ internal sealed class IdentityUserAuthenticator : IUserAuthenticator
         var passwordOk = await _userManager.CheckPasswordAsync(user, password);
         if (!passwordOk)
         {
-            var accessFailed = await _userManager.AccessFailedAsync(user);
-            if (!accessFailed.Succeeded)
-            {
-                // A real Identity persistence failure must not be silently
-                // reported as invalid credentials. Do not expose Identity
-                // error descriptions.
-                throw new InvalidOperationException(
-                    "The authenticator could not record the failed access attempt.");
-            }
-
-            return AuthenticationResult.Failure(AuthenticationStatus.InvalidCredentials);
+            return await RecordFailedAccessAttemptAsync(user, cancellationToken);
         }
 
         if (!user.IsActive)
@@ -110,6 +108,17 @@ internal sealed class IdentityUserAuthenticator : IUserAuthenticator
 
         var roles = await _userManager.GetRolesAsync(user);
 
+        // Capture the concurrency stamp AFTER every UserManager call that may
+        // have rotated it (for example a password-hash rehash triggered by
+        // CheckPasswordAsync). The tracked entity's value reflects the state
+        // persisted for this user at the end of the authentication path.
+        var concurrencyStamp = user.ConcurrencyStamp;
+        if (string.IsNullOrWhiteSpace(concurrencyStamp))
+        {
+            throw new InvalidOperationException(
+                "The authenticator could not obtain the user's persistence-state token.");
+        }
+
         var snapshot = new AuthenticatedUser(
             UserId: user.Id,
             Email: user.Email!,
@@ -117,8 +126,57 @@ internal sealed class IdentityUserAuthenticator : IUserAuthenticator
             OrganizationId: user.OrganizationId,
             OrganizationName: organization.Name,
             SecurityStamp: securityStamp,
+            ConcurrencyStamp: concurrencyStamp,
             Roles: [.. roles]);
 
         return AuthenticationResult.Success(snapshot);
+    }
+
+    /// <summary>
+    /// Records a wrong-password attempt inside a short serialized transaction.
+    /// Acquiring the SQL Server UPDLOCK on the user row and reloading the
+    /// tracked entity under that lock makes the subsequent
+    /// <see cref="UserManager{TUser}.AccessFailedAsync"/> operate on a fresh
+    /// concurrency stamp, so structurally no other authenticator writer for
+    /// the same user can race and cause an Identity concurrency failure.
+    /// </summary>
+    private async Task<AuthenticationResult> RecordFailedAccessAttemptAsync(
+        ApplicationUser user,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = await _db.Database
+            .BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+
+        await SqlServerAuthenticationLocks
+            .AcquireUserUpdateLockAsync(_db, user.Id, cancellationToken);
+
+        var entry = _db.Entry(user);
+        await entry.ReloadAsync(cancellationToken);
+
+        if (entry.State is EntityState.Deleted or EntityState.Detached)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return AuthenticationResult.Failure(AuthenticationStatus.InvalidCredentials);
+        }
+
+        if (await _userManager.IsLockedOutAsync(user))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return AuthenticationResult.Failure(AuthenticationStatus.LockedOut);
+        }
+
+        var accessFailed = await _userManager.AccessFailedAsync(user);
+        if (!accessFailed.Succeeded)
+        {
+            // Under UPDLOCK + fresh reload no other writer can rotate the
+            // concurrency stamp before AccessFailedAsync completes, so a
+            // failure here is a real persistence problem rather than a normal
+            // concurrency conflict. Do not silently drop the attempt.
+            throw new InvalidOperationException(
+                "The authenticator could not record the failed access attempt.");
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return AuthenticationResult.Failure(AuthenticationStatus.InvalidCredentials);
     }
 }

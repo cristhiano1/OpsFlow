@@ -14,8 +14,11 @@ public sealed class LoginServiceTests
 
     private const string ValidAccessToken = "access-token-value";
     private const string ValidRefreshToken = "refresh-token-value";
+    private const string SampleConcurrencyStamp = "CONCURRENCY-STAMP-VALUE";
 
-    private static AuthenticatedUser SampleUser(IReadOnlyCollection<string>? roles = null)
+    private static AuthenticatedUser SampleUser(
+        IReadOnlyCollection<string>? roles = null,
+        string concurrencyStamp = SampleConcurrencyStamp)
     {
         IReadOnlyCollection<string> effectiveRoles = roles ?? [OpsFlowRoles.Viewer];
         return new AuthenticatedUser(
@@ -25,6 +28,7 @@ public sealed class LoginServiceTests
             OrganizationId: Guid.NewGuid(),
             OrganizationName: "Test Organization",
             SecurityStamp: "SECURITY-STAMP-VALUE",
+            ConcurrencyStamp: concurrencyStamp,
             Roles: effectiveRoles);
     }
 
@@ -165,6 +169,21 @@ public sealed class LoginServiceTests
         Assert.Equal(user.UserId, request.UserId);
         Assert.Equal(user.OrganizationId, request.OrganizationId);
         Assert.Equal(user.SecurityStamp, request.ExpectedSecurityStamp);
+    }
+
+    [Fact]
+    public async Task LoginAsync_passes_authenticated_concurrency_stamp_as_expected_concurrency_stamp()
+    {
+        var user = SampleUser(concurrencyStamp: "concurrency-A");
+        var (service, _, _, sessionIssuer) = CreateHappyPath(user);
+
+        var result = await service.LoginAsync(SampleCommand(), CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        var request = sessionIssuer.ReceivedRequest;
+        Assert.NotNull(request);
+        Assert.Equal("concurrency-A", request.ExpectedConcurrencyStamp);
+        Assert.Equal(user.ConcurrencyStamp, request.ExpectedConcurrencyStamp);
     }
 
     [Fact]

@@ -16,6 +16,33 @@ namespace OpsFlow.Infrastructure.Authentication;
 /// last-login timestamp, and refresh-token hash. The raw refresh token is
 /// returned only through <see cref="SessionIssueResult.Issued"/> and is never
 /// persisted or logged.
+/// <para>
+/// The transaction begins by acquiring a SQL Server UPDLOCK on the user row
+/// through <see cref="SqlServerAuthenticationLocks.AcquireUserUpdateLockAsync"/>.
+/// Serializing same-user writers this way eliminates the classic
+/// shared-to-exclusive lock conversion deadlock between two concurrent
+/// successful logins for the same user.
+/// </para>
+/// <para>
+/// The successful-login state is written by directly assigning
+/// <c>AccessFailedCount</c> and <c>LastLoginAt</c> on the tracked entity,
+/// deliberately bypassing <see cref="UserManager{TUser}.ResetAccessFailedCountAsync"/>.
+/// Any Identity call that flows through <c>UserStore.UpdateAsync</c> rotates
+/// <c>ConcurrencyStamp</c>; rotating it here would self-invalidate any
+/// concurrent same-user login whose snapshot predates this commit. Direct
+/// assignment is safe in this narrowly scoped path because the transaction,
+/// the user-row UPDLOCK, and the fresh reload together guarantee that no
+/// competing writer can update the row until we commit.
+/// </para>
+/// <para>
+/// Revalidating <c>ConcurrencyStamp</c> catches role/password/email/lockout
+/// mutations that Identity performed via <c>UserStore.UpdateAsync</c> between
+/// authentication and session issuance. Role mutations in OpsFlow must flow
+/// through <see cref="UserManager{TUser}"/> so that the user row's
+/// <c>ConcurrencyStamp</c> is rotated; direct SQL modifications of
+/// <c>AspNetUserRoles</c> would bypass this revalidation and are not part of
+/// the supported authentication design.
+/// </para>
 /// </summary>
 internal sealed class LoginSessionIssuer : ILoginSessionIssuer
 {
@@ -60,6 +87,12 @@ internal sealed class LoginSessionIssuer : ILoginSessionIssuer
         await using var transaction = await _db.Database
             .BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken);
 
+        // Serialize same-user writers before any read so that a second
+        // concurrent transaction cannot escalate a shared lock into a deadlock
+        // when it later needs an exclusive lock for the successful-login UPDATE.
+        await SqlServerAuthenticationLocks
+            .AcquireUserUpdateLockAsync(_db, request.UserId, cancellationToken);
+
         var user = await ReloadOrQueryUserAsync(request.UserId, cancellationToken);
         if (user is null)
         {
@@ -101,21 +134,24 @@ internal sealed class LoginSessionIssuer : ILoginSessionIssuer
             return SessionIssueResult.Rejected();
         }
 
-        var resetResult = await _userManager.ResetAccessFailedCountAsync(user);
-        if (!resetResult.Succeeded)
+        var currentConcurrencyStamp = user.ConcurrencyStamp;
+        if (string.IsNullOrWhiteSpace(currentConcurrencyStamp))
         {
-            var concurrencyCode = _userManager.ErrorDescriber.ConcurrencyFailure().Code;
-            if (resetResult.Errors.Any(e =>
-                    string.Equals(e.Code, concurrencyCode, StringComparison.Ordinal)))
-            {
-                return SessionIssueResult.Rejected();
-            }
+            return SessionIssueResult.Rejected();
+        }
 
-            throw new InvalidOperationException(
-                "The login session issuer could not persist the successful-login state.");
+        if (!string.Equals(currentConcurrencyStamp, request.ExpectedConcurrencyStamp, StringComparison.Ordinal))
+        {
+            return SessionIssueResult.Rejected();
         }
 
         var now = _clock.UtcNow;
+
+        // Direct tracked-property assignment: EF Core includes ConcurrencyStamp
+        // in the UPDATE predicate (optimistic concurrency check) but does not
+        // modify it in the SET clause, so a successful login does not rotate
+        // the stamp. See the type-level remarks for why this is required.
+        user.AccessFailedCount = 0;
         user.LastLoginAt = now;
 
         var rawToken = _tokenGenerator.Generate();

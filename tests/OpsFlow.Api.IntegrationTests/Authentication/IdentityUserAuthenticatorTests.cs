@@ -213,12 +213,13 @@ public sealed class IdentityUserAuthenticatorTests
     }
 
     [Fact]
-    public async Task Success_includes_the_current_security_stamp()
+    public async Task Success_includes_the_current_security_and_concurrency_stamps()
     {
         await using var host = AuthenticationTestHost.Build(_fixture.ConnectionString);
 
         Guid userId;
-        string returnedStamp;
+        string returnedSecurityStamp;
+        string returnedConcurrencyStamp;
         using (var scope = host.Services.CreateScope())
         {
             var org = await AuthenticationTestHost.SeedOrganizationAsync(scope.ServiceProvider);
@@ -229,12 +230,15 @@ public sealed class IdentityUserAuthenticatorTests
             var result = await authenticator.AuthenticateAsync(user.Email!, ValidPassword, CancellationToken.None);
             Assert.Equal(AuthenticationStatus.Success, result.Status);
             Assert.False(string.IsNullOrWhiteSpace(result.User!.SecurityStamp));
-            returnedStamp = result.User.SecurityStamp;
+            Assert.False(string.IsNullOrWhiteSpace(result.User.ConcurrencyStamp));
+            returnedSecurityStamp = result.User.SecurityStamp;
+            returnedConcurrencyStamp = result.User.ConcurrencyStamp;
         }
 
         await using var db = OpenReadContext();
         var reread = await db.Users.AsNoTracking().SingleAsync(u => u.Id == userId);
-        Assert.Equal(reread.SecurityStamp, returnedStamp);
+        Assert.Equal(reread.SecurityStamp, returnedSecurityStamp);
+        Assert.Equal(reread.ConcurrencyStamp, returnedConcurrencyStamp, StringComparer.Ordinal);
     }
 
     [Fact]

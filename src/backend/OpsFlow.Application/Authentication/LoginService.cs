@@ -82,7 +82,8 @@ public sealed class LoginService
             new LoginSessionRequest(
                 user.UserId,
                 user.OrganizationId,
-                user.SecurityStamp),
+                user.SecurityStamp,
+                user.ConcurrencyStamp),
             cancellationToken);
 
         if (sessionResult.Status != SessionIssueStatus.Issued
