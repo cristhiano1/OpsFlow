@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using OpsFlow.Api.Authentication;
+using OpsFlow.Application.Authentication;
 using OpsFlow.Infrastructure;
 using OpsFlow.Infrastructure.Configuration;
 using OpsFlow.Infrastructure.Persistence;
@@ -11,6 +12,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddOpsFlowInfrastructure(builder.Configuration);
 builder.Services.AddOpsFlowAuthentication();
+builder.Services.AddScoped<LoginService>();
 
 var app = builder.Build();
 
@@ -20,6 +22,14 @@ await ApplyDevelopmentDataAsync(app);
 // served over HTTP behind the Vite dev proxy (see docs/architecture).
 if (!app.Environment.IsDevelopment())
 {
+    app.UseExceptionHandler(exceptionApp =>
+    {
+        exceptionApp.Run(context =>
+        {
+            context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+            return Task.CompletedTask;
+        });
+    });
     app.UseHttpsRedirection();
 }
 
