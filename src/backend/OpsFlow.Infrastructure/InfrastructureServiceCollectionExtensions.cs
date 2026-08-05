@@ -85,5 +85,6 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IUserAuthenticator, IdentityUserAuthenticator>();
         services.AddScoped<ILoginSessionIssuer, LoginSessionIssuer>();
         services.AddScoped<IRefreshSessionRotator, RefreshSessionRotator>();
+        services.AddScoped<ILogoutSessionRevoker, LogoutSessionRevoker>();
     }
 }

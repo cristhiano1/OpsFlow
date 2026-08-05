@@ -35,4 +35,22 @@ internal static class RefreshTokenCookie
         var value = request.Cookies[Name];
         return string.IsNullOrWhiteSpace(value) ? null : value;
     }
+
+    /// <summary>
+    /// Emits a <c>Set-Cookie</c> deletion header for the refresh-token cookie
+    /// using the same name, path, and security attributes as issuance. The
+    /// browser removes the cookie only if the deletion attributes match the
+    /// issued cookie's attributes.
+    /// </summary>
+    public static void DeleteFrom(HttpResponse response)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        response.Cookies.Delete(Name, new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = true,
+            SameSite = SameSiteMode.Strict,
+            Path = "/api/v1/auth",
+        });
+    }
 }

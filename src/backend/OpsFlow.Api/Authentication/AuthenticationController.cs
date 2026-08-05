@@ -116,6 +116,35 @@ public sealed class AuthenticationController : ControllerBase
         return Ok(response);
     }
 
+    /// <summary>
+    /// Terminates the caller's refresh-token session. The presented refresh
+    /// cookie is used to identify the session; the response is always
+    /// 204 No Content on successful handling. The browser cookie is deleted
+    /// only after the logout service completes successfully — an
+    /// unexpected infrastructure failure propagates without touching the
+    /// cookie so the client is not misled about the persisted state.
+    /// </summary>
+    [HttpPost("logout")]
+    [AllowAnonymous]
+    public async Task<IActionResult> LogoutAsync(
+        [FromServices] LogoutService logoutService,
+        CancellationToken cancellationToken)
+    {
+        var rawToken = RefreshTokenCookie.ReadFrom(Request);
+
+        await logoutService.LogoutAsync(
+            new LogoutCommand(rawToken),
+            cancellationToken);
+
+        // Cookie deletion happens ONLY after logout completes successfully.
+        // On an unexpected exception above, this line does not execute and
+        // the existing UseExceptionHandler produces a neutral 500 without
+        // any Set-Cookie.
+        RefreshTokenCookie.DeleteFrom(Response);
+
+        return NoContent();
+    }
+
     private EmptyResult UnauthorizedWithoutBody()
     {
         Response.StatusCode = StatusCodes.Status401Unauthorized;
