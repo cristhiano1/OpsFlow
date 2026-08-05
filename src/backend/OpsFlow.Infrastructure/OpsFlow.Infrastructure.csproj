@@ -12,5 +12,6 @@
   <ItemGroup>
     <!-- Exposes internal authentication/crypto types to the infrastructure unit tests only. -->
     <InternalsVisibleTo Include="OpsFlow.Infrastructure.UnitTests" />
+    <InternalsVisibleTo Include="OpsFlow.Api.IntegrationTests" />
   </ItemGroup>
 </Project>

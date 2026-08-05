@@ -74,5 +74,15 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IAccessTokenService, JwtAccessTokenService>();
         services.AddSingleton<IRefreshTokenGenerator, RefreshTokenGenerator>();
         services.AddSingleton<IRefreshTokenHasher, RefreshTokenHasher>();
+
+        // Login-time authentication adapters. The hash cache is a singleton so
+        // the dummy hash is produced exactly once per process; the verifier and
+        // authenticator are scoped because they depend on scoped Identity and
+        // DbContext services. LoginService (Application) is registered from the
+        // Api composition root, not here.
+        services.AddSingleton<DummyPasswordHashCache>();
+        services.AddScoped<IDummyPasswordVerifier, DummyPasswordVerifier>();
+        services.AddScoped<IUserAuthenticator, IdentityUserAuthenticator>();
+        services.AddScoped<ILoginSessionIssuer, LoginSessionIssuer>();
     }
 }
