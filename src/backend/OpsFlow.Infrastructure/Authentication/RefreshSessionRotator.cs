@@ -89,10 +89,14 @@ internal sealed class RefreshSessionRotator : IRefreshSessionRotator
         }
 
         var hash = _tokenHasher.Hash(request.RawRefreshToken);
-        var now = _clock.UtcNow;
 
-        // Pre-transaction observation to deterministically classify a
-        // concurrency race vs. a replay attempt.
+        // First time observation: used ONLY to classify the pre-lock state
+        // of the token so we can distinguish a concurrency race from a
+        // replay attempt. It must NEVER be reused for authoritative
+        // expiration checks or persisted timestamps, because it may go
+        // stale while we are blocked waiting for the auth locks below.
+        var initialNow = _clock.UtcNow;
+
         var initial = await _db.RefreshTokens
             .AsNoTracking()
             .FirstOrDefaultAsync(t => t.TokenHash == hash, cancellationToken);
@@ -103,7 +107,7 @@ internal sealed class RefreshSessionRotator : IRefreshSessionRotator
         }
 
         var wasActiveAtInitialRead =
-            initial.RevokedAt is null && initial.ExpiresAt > now;
+            initial.RevokedAt is null && initial.ExpiresAt > initialNow;
         var userId = initial.UserId;
 
         await using var transaction = await _db.Database
@@ -114,6 +118,13 @@ internal sealed class RefreshSessionRotator : IRefreshSessionRotator
             .AcquireUserUpdateLockAsync(_db, userId, cancellationToken);
         await SqlServerAuthenticationLocks
             .AcquireRefreshTokenUpdateLockByHashAsync(_db, hash, cancellationToken);
+
+        // Second, authoritative time observation: taken after BOTH locks
+        // have been acquired. Any lock wait above (contention with a
+        // concurrent login/refresh/logout for the same user or token) is
+        // now behind us, so this value is used for every real expiration
+        // check, revocation timestamp, and persisted successor timestamp.
+        var validationNow = _clock.UtcNow;
 
         var reloaded = await _db.RefreshTokens
             .FirstOrDefaultAsync(t => t.TokenHash == hash, cancellationToken);
@@ -138,14 +149,14 @@ internal sealed class RefreshSessionRotator : IRefreshSessionRotator
             await RevokeFamilyAsync(
                 reloaded.TokenFamilyId,
                 RefreshTokenRevocationReason.ReuseDetected,
-                now,
+                validationNow,
                 cancellationToken);
             _ = await _db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return RefreshRotationResult.Rejected();
         }
 
-        if (now >= reloaded.ExpiresAt)
+        if (validationNow >= reloaded.ExpiresAt)
         {
             return RefreshRotationResult.Rejected();
         }
@@ -185,7 +196,7 @@ internal sealed class RefreshSessionRotator : IRefreshSessionRotator
             await RevokeFamilyAsync(
                 reloaded.TokenFamilyId,
                 RefreshTokenRevocationReason.SecurityChange,
-                now,
+                validationNow,
                 cancellationToken);
             _ = await _db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
@@ -212,12 +223,15 @@ internal sealed class RefreshSessionRotator : IRefreshSessionRotator
         }
 
         // Rotate: mark the old token revoked and insert the successor.
+        // All persisted timestamps and the new expiration derive from
+        // validationNow (the post-lock authoritative time), never from
+        // initialNow.
         var newTokenId = Guid.NewGuid();
         var newRawToken = _tokenGenerator.Generate();
         var newTokenHash = _tokenHasher.Hash(newRawToken);
-        var newExpiresAt = now.AddDays(_jwtOptions.RefreshTokenLifetimeDays);
+        var newExpiresAt = validationNow.AddDays(_jwtOptions.RefreshTokenLifetimeDays);
 
-        reloaded.RevokedAt = now;
+        reloaded.RevokedAt = validationNow;
         reloaded.ReasonRevoked = RefreshTokenRevocationReason.Rotated;
         reloaded.ReplacedByTokenId = newTokenId;
 
@@ -228,7 +242,7 @@ internal sealed class RefreshSessionRotator : IRefreshSessionRotator
             TokenHash = newTokenHash,
             TokenFamilyId = reloaded.TokenFamilyId,
             IssuedSecurityStamp = currentSecurityStamp,
-            CreatedAt = now,
+            CreatedAt = validationNow,
             ExpiresAt = newExpiresAt,
         });
 

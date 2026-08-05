@@ -547,4 +547,139 @@ public sealed class RefreshSessionRotatorTests
             new RefreshRotationRequest(rawToken), CancellationToken.None);
         Assert.Equal(RefreshRotationStatus.Rotated, successResult.Status);
     }
+
+    // ================================================================
+    // Regression: expiration must use the post-lock authoritative time,
+    // not the pre-lock initial timestamp. Simulates the "waited on the
+    // auth locks long enough for the token to expire" scenario without
+    // Thread.Sleep or real lock blocking by injecting a clock that
+    // returns an active-window value at the initial observation and an
+    // expired-window value at the post-lock validation observation.
+    // ================================================================
+
+    [Fact]
+    public async Task Refresh_uses_post_lock_time_and_rejects_token_that_expired_while_waiting_on_locks()
+    {
+        // Setup host: seed + login use a FixedClock so ExpiresAt is
+        // predictable.
+        var loginNow = FixedUtcNow;
+        var expectedExpiresAt = loginNow.AddDays(ConfiguredLifetimeDays);
+
+        await using var setupHost = AuthenticationTestHost.Build(
+            _fixture.ConnectionString, clock: new FixedClock(loginNow));
+        var (user, rawToken) = await SeedAndLoginAsync(setupHost);
+
+        var hasher = setupHost.Services.GetRequiredService<IRefreshTokenHasher>();
+        var hash = hasher.Hash(rawToken);
+
+        RefreshToken preRotation;
+        int preFamilyCount;
+        await using (var pre = OpenReadContext())
+        {
+            preRotation = await pre.RefreshTokens.AsNoTracking()
+                .SingleAsync(t => t.TokenHash == hash);
+            preFamilyCount = await pre.RefreshTokens.AsNoTracking()
+                .CountAsync(t => t.TokenFamilyId == preRotation.TokenFamilyId);
+        }
+        Assert.Equal(expectedExpiresAt, preRotation.ExpiresAt);
+        Assert.Null(preRotation.RevokedAt);
+
+        // Rotation host: QueuedClock returns two distinct values.
+        //   - initialNow  = still within the token's active window
+        //   - validationNow = past ExpiresAt (as if we waited long enough
+        //                     on the auth locks for the token to expire)
+        var initialNow = expectedExpiresAt.AddHours(-1);
+        var validationNow = expectedExpiresAt.AddMinutes(1);
+        var queuedClock = new QueuedClock(initialNow, validationNow);
+
+        await using var rotationHost = AuthenticationTestHost.Build(
+            _fixture.ConnectionString, clock: queuedClock);
+
+        using (var scope = rotationHost.Services.CreateScope())
+        {
+            var rotator = scope.ServiceProvider.GetRequiredService<IRefreshSessionRotator>();
+            var result = await rotator.RotateAsync(
+                new RefreshRotationRequest(rawToken), CancellationToken.None);
+
+            Assert.Equal(RefreshRotationStatus.Rejected, result.Status);
+            Assert.Null(result.NewRefreshToken);
+            Assert.Null(result.AccessToken);
+        }
+
+        // The clock was consulted at both boundaries.
+        Assert.True(queuedClock.CallCount >= 2,
+            $"Expected at least two clock reads (initialNow + validationNow), got {queuedClock.CallCount}.");
+
+        // Fresh DbContext: assert the original token was NOT rotated and
+        // no successor was persisted.
+        await using var verify = OpenReadContext();
+        var postRotation = await verify.RefreshTokens.AsNoTracking()
+            .SingleOrDefaultAsync(t => t.TokenHash == hash);
+        Assert.NotNull(postRotation);
+        Assert.Equal(preRotation.Id, postRotation!.Id);
+        Assert.Null(postRotation.RevokedAt);
+        Assert.Null(postRotation.ReasonRevoked);
+        Assert.Null(postRotation.ReplacedByTokenId);
+        Assert.Equal(preRotation.TokenFamilyId, postRotation.TokenFamilyId);
+
+        var postFamilyCount = await verify.RefreshTokens.AsNoTracking()
+            .CountAsync(t => t.TokenFamilyId == preRotation.TokenFamilyId);
+        Assert.Equal(preFamilyCount, postFamilyCount);
+
+        var totalForUser = await verify.RefreshTokens.AsNoTracking()
+            .CountAsync(t => t.UserId == user.Id);
+        Assert.Equal(1, totalForUser);
+    }
+
+    // ================================================================
+    // Ordinary successful rotation must persist post-lock (validationNow)
+    // timestamps, not the pre-lock (initialNow) value.
+    // ================================================================
+
+    [Fact]
+    public async Task Successful_rotation_persists_validation_time_not_initial_time()
+    {
+        var loginNow = FixedUtcNow;
+
+        await using var setupHost = AuthenticationTestHost.Build(
+            _fixture.ConnectionString, clock: new FixedClock(loginNow));
+        var (user, rawToken) = await SeedAndLoginAsync(setupHost);
+
+        // initialNow and validationNow are BOTH within the active window
+        // (so the token does not expire), but are different values so we
+        // can verify which one was actually persisted.
+        var initialNow = loginNow.AddHours(1);
+        var validationNow = loginNow.AddHours(2);
+        var queuedClock = new QueuedClock(initialNow, validationNow);
+        var expectedNewExpiresAt = validationNow.AddDays(ConfiguredLifetimeDays);
+
+        await using var rotationHost = AuthenticationTestHost.Build(
+            _fixture.ConnectionString, clock: queuedClock);
+
+        var hasher = rotationHost.Services.GetRequiredService<IRefreshTokenHasher>();
+        var oldHash = hasher.Hash(rawToken);
+
+        RefreshRotationResult result;
+        using (var scope = rotationHost.Services.CreateScope())
+        {
+            var rotator = scope.ServiceProvider.GetRequiredService<IRefreshSessionRotator>();
+            result = await rotator.RotateAsync(
+                new RefreshRotationRequest(rawToken), CancellationToken.None);
+            Assert.Equal(RefreshRotationStatus.Rotated, result.Status);
+        }
+
+        Assert.Equal(expectedNewExpiresAt, result.NewRefreshTokenExpiresAt);
+
+        await using var verify = OpenReadContext();
+        var oldToken = await verify.RefreshTokens.AsNoTracking()
+            .SingleAsync(t => t.TokenHash == oldHash);
+        Assert.Equal(validationNow, oldToken.RevokedAt);
+        Assert.NotEqual(initialNow, oldToken.RevokedAt);
+
+        var successor = await verify.RefreshTokens.AsNoTracking()
+            .SingleAsync(t => t.UserId == user.Id && t.RevokedAt == null);
+        Assert.Equal(validationNow, successor.CreatedAt);
+        Assert.Equal(expectedNewExpiresAt, successor.ExpiresAt);
+        Assert.NotEqual(initialNow, successor.CreatedAt);
+    }
 }
