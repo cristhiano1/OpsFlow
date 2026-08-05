@@ -142,6 +142,41 @@ public sealed class LoginSessionIssuerTests
     }
 
     // ---------------------------------------------------------------
+    // 3b. IssuedSecurityStamp equals the user's current SecurityStamp
+    //     at issuance time. This binds the refresh token to the
+    //     security state that existed when it was created so the
+    //     refresh flow can detect a later SecurityStamp rotation.
+    // ---------------------------------------------------------------
+    [Fact]
+    public async Task Issued_security_stamp_equals_user_security_stamp_at_issuance_time()
+    {
+        await using var host = BuildHost(_fixture.ConnectionString);
+
+        Guid userId;
+        string expectedStamp;
+        using (var scope = host.Services.CreateScope())
+        {
+            var org = await AuthenticationTestHost.SeedOrganizationAsync(scope.ServiceProvider);
+            var user = await AuthenticationTestHost.SeedUserAsync(
+                scope.ServiceProvider, org.Id, ValidPassword);
+            userId = user.Id;
+
+            var (snapshot, request) = await AuthenticateAsync(scope.ServiceProvider, user.Email!);
+            expectedStamp = snapshot.SecurityStamp;
+
+            var issuer = scope.ServiceProvider.GetRequiredService<ILoginSessionIssuer>();
+            var result = await issuer.IssueAsync(request, CancellationToken.None);
+            Assert.Equal(SessionIssueStatus.Issued, result.Status);
+        }
+
+        await using var db = OpenReadContext();
+        var token = await db.RefreshTokens.AsNoTracking()
+            .SingleAsync(t => t.UserId == userId);
+        Assert.False(string.IsNullOrWhiteSpace(token.IssuedSecurityStamp));
+        Assert.Equal(expectedStamp, token.IssuedSecurityStamp, StringComparer.Ordinal);
+    }
+
+    // ---------------------------------------------------------------
     // 4. CreatedAt equals deterministic IClock.UtcNow and ExpiresAt
     //    equals CreatedAt + configured RefreshTokenLifetimeDays.
     // ---------------------------------------------------------------

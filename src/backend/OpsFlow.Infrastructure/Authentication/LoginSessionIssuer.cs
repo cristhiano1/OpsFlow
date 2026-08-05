@@ -164,6 +164,11 @@ internal sealed class LoginSessionIssuer : ILoginSessionIssuer
             UserId = user.Id,
             TokenHash = tokenHash,
             TokenFamilyId = Guid.NewGuid(),
+            // The current SecurityStamp has already been validated above.
+            // Binding the token to it lets the refresh flow detect a later
+            // security-sensitive change (password change, forced sign-out,
+            // email change, etc.).
+            IssuedSecurityStamp = currentStamp,
             CreatedAt = now,
             ExpiresAt = expiresAt,
         });

@@ -31,7 +31,8 @@ internal sealed class AuthenticationTestHost : IAsyncDisposable
     public static AuthenticationTestHost Build(
         string connectionString,
         IClock? clock = null,
-        IRefreshTokenGenerator? tokenGenerator = null)
+        IRefreshTokenGenerator? tokenGenerator = null,
+        IAccessTokenService? accessTokenService = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -57,11 +58,29 @@ internal sealed class AuthenticationTestHost : IAsyncDisposable
         services.AddScoped<IDummyPasswordVerifier, DummyPasswordVerifier>();
         services.AddScoped<IUserAuthenticator, IdentityUserAuthenticator>();
 
+
         services.AddSingleton<IClock>(clock ?? new SystemClock());
         services.AddSingleton<IRefreshTokenGenerator>(tokenGenerator ?? new RefreshTokenGenerator());
         services.AddSingleton<IRefreshTokenHasher, RefreshTokenHasher>();
-        services.Configure<JwtOptions>(o => o.RefreshTokenLifetimeDays = 7);
+        services.Configure<JwtOptions>(o =>
+        {
+            o.Issuer = "OpsFlow.Test";
+            o.Audience = "OpsFlow.Api.Test";
+            o.SigningKey = Convert.ToBase64String(
+                System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+            o.AccessTokenLifetimeMinutes = 15;
+            o.RefreshTokenLifetimeDays = 7;
+        });
+        if (accessTokenService is null)
+        {
+            services.AddSingleton<IAccessTokenService, JwtAccessTokenService>();
+        }
+        else
+        {
+            services.AddSingleton(accessTokenService);
+        }
         services.AddScoped<ILoginSessionIssuer, LoginSessionIssuer>();
+        services.AddScoped<IRefreshSessionRotator, RefreshSessionRotator>();
 
         return new AuthenticationTestHost(services.BuildServiceProvider());
     }
