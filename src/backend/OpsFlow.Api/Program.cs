@@ -13,6 +13,7 @@ builder.Services.AddControllers();
 builder.Services.AddOpsFlowInfrastructure(builder.Configuration);
 builder.Services.AddOpsFlowAuthentication();
 builder.Services.AddScoped<LoginService>();
+builder.Services.AddScoped<RefreshService>();
 
 var app = builder.Build();
 

@@ -14,6 +14,12 @@ internal sealed class RefreshTokenConfiguration : IEntityTypeConfiguration<Refre
         builder.Property(t => t.TokenHash).IsRequired().HasMaxLength(88);
         builder.HasIndex(t => t.TokenHash).IsUnique();
 
+        // Nullable at the schema level for safe rollout to any database that
+        // already contains RefreshTokens; the application layer always
+        // populates a non-null value on every newly issued token. See the
+        // remarks on RefreshToken.IssuedSecurityStamp.
+        builder.Property(t => t.IssuedSecurityStamp).HasMaxLength(128);
+
         builder.HasIndex(t => t.UserId);
         builder.HasIndex(t => t.TokenFamilyId);
         builder.HasIndex(t => t.ExpiresAt);

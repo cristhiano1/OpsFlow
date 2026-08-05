@@ -22,6 +22,23 @@ public class RefreshToken
     /// <summary>Identifier of the rotation family this token belongs to.</summary>
     public Guid TokenFamilyId { get; set; }
 
+    /// <summary>
+    /// The user's SecurityStamp captured when this refresh token was issued.
+    /// <para>
+    /// New tokens produced by <c>LoginSessionIssuer</c> and
+    /// <c>RefreshSessionRotator</c> always populate this. The column is
+    /// intentionally nullable so that adding it to an existing database with
+    /// pre-existing rows is safe, but the refresh flow treats a null or
+    /// whitespace value as a security-state mismatch and revokes the token
+    /// family with <see cref="RefreshTokenRevocationReason.SecurityChange"/>.
+    /// Legacy rows are deliberately NOT backfilled with the user's current
+    /// SecurityStamp because they might have been issued before a
+    /// security-sensitive Identity change and must not become trusted by
+    /// accident.
+    /// </para>
+    /// </summary>
+    public string? IssuedSecurityStamp { get; set; }
+
     /// <summary>Creation timestamp (UTC).</summary>
     public DateTimeOffset CreatedAt { get; set; }
 
