@@ -254,29 +254,20 @@ public sealed class CurrentUserReaderTests
         var (user, stamp) = await SeedActiveUserAsync(host);
 
         // Bypass the User→Organization FK long enough to point the user at a
-        // non-existent organization id. Restore the constraint at the end so
-        // the shared fixture keeps its integrity for other tests.
+        // non-existent organization id. Cleanup below removes the orphan and
+        // then re-enables the FK WITH CHECK so the shared SqlServerFixture is
+        // left in the same enabled + trusted state migrations produce.
         var orphanOrgId = Guid.NewGuid();
-        using (var scope = host.Services.CreateScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<OpsFlowDbContext>();
-            _ = await db.Database.ExecuteSqlRawAsync(
-                "ALTER TABLE dbo.AspNetUsers NOCHECK CONSTRAINT [FK_AspNetUsers_Organizations_OrganizationId];");
-            try
-            {
-                _ = await db.Database.ExecuteSqlRawAsync(
-                    "UPDATE dbo.AspNetUsers SET OrganizationId = {0} WHERE Id = {1};",
-                    orphanOrgId, user.Id);
-            }
-            finally
-            {
-                _ = await db.Database.ExecuteSqlRawAsync(
-                    "ALTER TABLE dbo.AspNetUsers WITH NOCHECK CHECK CONSTRAINT [FK_AspNetUsers_Organizations_OrganizationId];");
-            }
-        }
+        await using var setupContext = OpenReadContext();
 
+        _ = await setupContext.Database.ExecuteSqlRawAsync(
+            "ALTER TABLE dbo.AspNetUsers NOCHECK CONSTRAINT [FK_AspNetUsers_Organizations_OrganizationId];");
         try
         {
+            _ = await setupContext.Database.ExecuteSqlRawAsync(
+                "UPDATE dbo.AspNetUsers SET OrganizationId = {0} WHERE Id = {1};",
+                orphanOrgId, user.Id);
+
             using var readScope = host.Services.CreateScope();
             var reader = readScope.ServiceProvider.GetRequiredService<ICurrentUserReader>();
 
@@ -287,14 +278,30 @@ public sealed class CurrentUserReaderTests
         }
         finally
         {
-            // Best-effort cleanup so the orphan user is not left in the shared
-            // fixture; use raw SQL to avoid the concurrency-stamp round-trip.
-            await using var db = OpenReadContext();
-            _ = await db.Database.ExecuteSqlRawAsync(
-                "DELETE FROM dbo.AspNetUserRoles WHERE UserId = {0}; " +
-                "DELETE FROM dbo.RefreshTokens WHERE UserId = {0}; " +
-                "DELETE FROM dbo.AspNetUsers WHERE Id = {0};",
-                user.Id);
+            // Load-bearing ordering: the orphan row must be removed BEFORE
+            // the constraint is re-enabled WITH CHECK, otherwise the trust
+            // re-validation would fail on the surviving row and leave the FK
+            // untrusted. The nested try/finally guarantees the re-trust step
+            // always runs, and neither exception is swallowed — the later
+            // exception simply replaces the earlier one per C# semantics.
+            try
+            {
+                _ = await setupContext.Database.ExecuteSqlRawAsync(
+                    "DELETE FROM dbo.AspNetUserRoles WHERE UserId = {0}; " +
+                    "DELETE FROM dbo.RefreshTokens WHERE UserId = {0}; " +
+                    "DELETE FROM dbo.AspNetUsers WHERE Id = {0};",
+                    user.Id);
+            }
+            finally
+            {
+                _ = await setupContext.Database.ExecuteSqlRawAsync(
+                    "ALTER TABLE dbo.AspNetUsers WITH CHECK CHECK CONSTRAINT [FK_AspNetUsers_Organizations_OrganizationId];");
+            }
         }
+
+        // Confirm the FK returns to enabled + trusted so sibling tests in the
+        // shared SqlServerFixture see the same schema state as production.
+        await using var probeContext = OpenReadContext();
+        await UserOrgForeignKeyProbe.AssertEnabledAndTrustedAsync(probeContext);
     }
 }

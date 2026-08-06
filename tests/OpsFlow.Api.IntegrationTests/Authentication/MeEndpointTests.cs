@@ -486,40 +486,51 @@ public sealed class MeEndpointTests : IDisposable
         var (user, _) = await SeedActiveUserAsync();
         var session = await LoginAsync(user.Email!);
 
+        // Bypass the User→Organization FK long enough to point the user at a
+        // non-existent organization id. Cleanup below removes the orphan and
+        // then re-enables the FK WITH CHECK so the shared SqlServerFixture is
+        // left in the same enabled + trusted state migrations produce.
         var orphanOrgId = Guid.NewGuid();
-        using (var scope = _factory.Services.CreateScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<OpsFlowDbContext>();
-            _ = await db.Database.ExecuteSqlRawAsync(
-                "ALTER TABLE dbo.AspNetUsers NOCHECK CONSTRAINT [FK_AspNetUsers_Organizations_OrganizationId];");
-            try
-            {
-                _ = await db.Database.ExecuteSqlRawAsync(
-                    "UPDATE dbo.AspNetUsers SET OrganizationId = {0} WHERE Id = {1};",
-                    orphanOrgId, user.Id);
-            }
-            finally
-            {
-                _ = await db.Database.ExecuteSqlRawAsync(
-                    "ALTER TABLE dbo.AspNetUsers WITH NOCHECK CHECK CONSTRAINT [FK_AspNetUsers_Organizations_OrganizationId];");
-            }
-        }
+        using var setupScope = _factory.Services.CreateScope();
+        var setupDb = setupScope.ServiceProvider.GetRequiredService<OpsFlowDbContext>();
 
+        _ = await setupDb.Database.ExecuteSqlRawAsync(
+            "ALTER TABLE dbo.AspNetUsers NOCHECK CONSTRAINT [FK_AspNetUsers_Organizations_OrganizationId];");
         try
         {
+            _ = await setupDb.Database.ExecuteSqlRawAsync(
+                "UPDATE dbo.AspNetUsers SET OrganizationId = {0} WHERE Id = {1};",
+                orphanOrgId, user.Id);
+
             using var response = await _client.SendAsync(BuildMeRequest(session.AccessToken));
             Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         }
         finally
         {
-            using var cleanup = _factory.Services.CreateScope();
-            var db = cleanup.ServiceProvider.GetRequiredService<OpsFlowDbContext>();
-            _ = await db.Database.ExecuteSqlRawAsync(
-                "DELETE FROM dbo.AspNetUserRoles WHERE UserId = {0}; " +
-                "DELETE FROM dbo.RefreshTokens WHERE UserId = {0}; " +
-                "DELETE FROM dbo.AspNetUsers WHERE Id = {0};",
-                user.Id);
+            // Load-bearing ordering: the orphan row must be removed BEFORE
+            // the constraint is re-enabled WITH CHECK, otherwise the trust
+            // re-validation would fail on the surviving row and leave the FK
+            // untrusted. The nested try/finally guarantees the re-trust step
+            // always runs, and neither exception is swallowed — the later
+            // exception simply replaces the earlier one per C# semantics.
+            try
+            {
+                _ = await setupDb.Database.ExecuteSqlRawAsync(
+                    "DELETE FROM dbo.AspNetUserRoles WHERE UserId = {0}; " +
+                    "DELETE FROM dbo.RefreshTokens WHERE UserId = {0}; " +
+                    "DELETE FROM dbo.AspNetUsers WHERE Id = {0};",
+                    user.Id);
+            }
+            finally
+            {
+                _ = await setupDb.Database.ExecuteSqlRawAsync(
+                    "ALTER TABLE dbo.AspNetUsers WITH CHECK CHECK CONSTRAINT [FK_AspNetUsers_Organizations_OrganizationId];");
+            }
         }
+
+        using var probeScope = _factory.Services.CreateScope();
+        var probeDb = probeScope.ServiceProvider.GetRequiredService<OpsFlowDbContext>();
+        await UserOrgForeignKeyProbe.AssertEnabledAndTrustedAsync(probeDb);
     }
 
     [Fact]
