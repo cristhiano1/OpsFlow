@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { apiFetch, ApiUnavailableError } from './apiClient'
+import { apiFetch, ApiUnavailableError, type ApiRequest } from './apiClient'
 import {
   AUTH_LOGIN_PATH,
   AUTH_LOGOUT_PATH,
@@ -509,6 +509,85 @@ describe('apiClient terminal-401 token-identity guard', () => {
     // C must still be present; generation unchanged.
     expect(getAccessToken()).toBe('C')
     expect(currentGeneration()).toBe(initialGeneration)
+  })
+})
+
+describe('apiClient body type contract (replayable only)', () => {
+  // Compile-time regression guard: if a future edit ever widens
+  // ApiRequest['body'] back to include ReadableStream, this line will stop
+  // producing a type error and the @ts-expect-error comment will itself
+  // fail to compile under `tsc -b` (run as part of `npm run build`).
+  it('type-check: ReadableStream is NOT assignable to ApiRequest.body', () => {
+    // @ts-expect-error - ReadableStream must be excluded from ApiRequest bodies.
+    const _invalid: ApiRequest = { path: '/x', body: new ReadableStream() }
+    // Silence noUnusedLocals for the assertion binding.
+    void _invalid
+  })
+
+  it('rejects apiFetch at runtime when a ReadableStream body slips through the type contract', async () => {
+    const stream = new ReadableStream()
+    await expect(
+      apiFetch({
+        path: '/api/v1/upload',
+        method: 'POST',
+        // Cast bypasses the TS guard to prove the runtime belt-and-suspenders.
+        body: stream as unknown as XMLHttpRequestBodyInit,
+      }),
+    ).rejects.toThrow(/replayable|ReadableStream/i)
+  })
+
+  it('accepts a FormData body and replays it verbatim across a refresh retry', async () => {
+    setAccessToken('t-old', currentGeneration())
+    const harness = stubFetch()
+    const form = new FormData()
+    form.append('field', 'value')
+    form.append('file', new Blob(['abc']), 'a.txt')
+
+    // First: 401 (expired), refresh: 200 → t-new, retry: 200.
+    harness.queue.push(async () => new Response(null, { status: 401 }))
+    harness.queue.push(async () => jsonBody(sampleLogin('t-new'), 200))
+    harness.queue.push(async () => jsonBody({ ok: true }, 200))
+
+    const response = await apiFetch({
+      path: '/api/v1/upload',
+      method: 'POST',
+      body: form,
+    })
+
+    expect(response.status).toBe(200)
+    expect(harness.calls).toHaveLength(3)
+    // The same FormData reference must be carried on both attempts —
+    // FormData is inherently replayable (fetch reads it fresh each call).
+    expect(harness.calls[0]!.init!.body).toBe(form)
+    expect(harness.calls[2]!.input).toBe('/api/v1/upload')
+    expect(harness.calls[2]!.init!.body).toBe(form)
+    // Body is still enumerable after both fetch calls (not consumed).
+    const entries = Array.from(form.entries())
+    expect(entries).toHaveLength(2)
+    // Retry carried the new bearer.
+    expect((harness.calls[2]!.init!.headers as Record<string, string>).Authorization).toBe('Bearer t-new')
+  })
+
+  it('accepts a URLSearchParams body and replays it across a refresh retry', async () => {
+    setAccessToken('t-old', currentGeneration())
+    const harness = stubFetch()
+    const params = new URLSearchParams([['a', '1'], ['b', '2']])
+
+    harness.queue.push(async () => new Response(null, { status: 401 }))
+    harness.queue.push(async () => jsonBody(sampleLogin('t-new'), 200))
+    harness.queue.push(async () => jsonBody({ ok: true }, 200))
+
+    const response = await apiFetch({
+      path: '/api/v1/form',
+      method: 'POST',
+      body: params,
+    })
+
+    expect(response.status).toBe(200)
+    expect(harness.calls[0]!.init!.body).toBe(params)
+    expect(harness.calls[2]!.init!.body).toBe(params)
+    // URLSearchParams is still enumerable / stringifiable after replay.
+    expect(params.toString()).toBe('a=1&b=2')
   })
 })
 

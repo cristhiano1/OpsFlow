@@ -18,6 +18,13 @@
 //      A retry that returns 401 only invalidates the session if the token
 //      currently in the store is still exactly the token used by that retry;
 //      otherwise a newer refresh already replaced it and must not be cleared.
+//   6. Request bodies are constrained to the REPLAYABLE subset of BodyInit
+//      (i.e. `XMLHttpRequestBodyInit` = Blob | BufferSource | FormData |
+//      URLSearchParams | string). ReadableStream is one-shot and cannot be
+//      safely re-read on a refresh retry, so it is excluded at the type
+//      level and rejected at runtime. Streaming authenticated uploads (if
+//      ever needed) would require an explicit body-factory API introduced
+//      in a later checkpoint.
 //
 // Only login / refresh / logout are exempt from the refresh-and-retry path so
 // that they cannot recursively trigger themselves. Every other endpoint —
@@ -37,7 +44,14 @@ const AUTH_EXEMPT_PATHS: ReadonlySet<string> = new Set([
   AUTH_LOGOUT_PATH,
 ])
 
-export type ApiRequest = HttpRequest
+// apiClient narrows HttpRequest.body from the full `BodyInit` down to
+// `XMLHttpRequestBodyInit` — the replayable subset defined in lib.dom.d.ts
+// (Blob | BufferSource | FormData | URLSearchParams | string). This
+// structurally excludes `ReadableStream`, whose one-shot nature would make
+// a post-refresh retry silently send an empty body.
+export interface ApiRequest extends Omit<HttpRequest, 'body'> {
+  body?: XMLHttpRequestBodyInit | null
+}
 
 // Raised when a required refresh cannot complete for a non-authoritative
 // reason (network failure, unexpected server error). Distinct from a 401
@@ -90,6 +104,19 @@ function maybeInvalidateForTerminal401(retryTokenUsed: string | null): void {
 }
 
 export async function apiFetch(request: ApiRequest): Promise<Response> {
+  // Belt-and-suspenders runtime guard: the TypeScript contract already
+  // excludes ReadableStream, but an untyped caller (or an `as any` cast)
+  // could still slip one through. `typeof ReadableStream !== 'undefined'`
+  // avoids failing in exotic runtimes where the global does not exist.
+  if (
+    typeof ReadableStream !== 'undefined'
+    && request.body instanceof ReadableStream
+  ) {
+    throw new Error(
+      'apiClient does not accept ReadableStream bodies — bodies must be replayable so a post-refresh retry can safely re-send them.',
+    )
+  }
+
   const isAuthExempt = AUTH_EXEMPT_PATHS.has(request.path)
 
   const first = attemptWithCurrentToken(request)
