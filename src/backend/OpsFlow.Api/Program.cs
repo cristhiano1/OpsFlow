@@ -15,6 +15,7 @@ builder.Services.AddOpsFlowAuthentication();
 builder.Services.AddScoped<LoginService>();
 builder.Services.AddScoped<RefreshService>();
 builder.Services.AddScoped<LogoutService>();
+builder.Services.AddScoped<CurrentUserService>();
 
 var app = builder.Build();
 

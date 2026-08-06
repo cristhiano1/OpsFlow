@@ -82,6 +82,7 @@ internal sealed class AuthenticationTestHost : IAsyncDisposable
         services.AddScoped<ILoginSessionIssuer, LoginSessionIssuer>();
         services.AddScoped<IRefreshSessionRotator, RefreshSessionRotator>();
         services.AddScoped<ILogoutSessionRevoker, LogoutSessionRevoker>();
+        services.AddScoped<ICurrentUserReader, CurrentUserReader>();
 
         return new AuthenticationTestHost(services.BuildServiceProvider());
     }

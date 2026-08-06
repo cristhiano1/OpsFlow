@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using OpsFlow.Application.Authentication;
+using OpsFlow.Application.Authorization;
 using OpsFlow.Contracts.Authentication;
 
 namespace OpsFlow.Api.Authentication;
@@ -143,6 +144,59 @@ public sealed class AuthenticationController : ControllerBase
         RefreshTokenCookie.DeleteFrom(Response);
 
         return NoContent();
+    }
+
+    /// <summary>
+    /// Returns the caller's current, authoritative profile resolved from the
+    /// database. The endpoint requires a valid access token, never reads the
+    /// refresh cookie, never issues tokens, and performs no writes. Any
+    /// mismatch between the presented JWT and the current DB state
+    /// (missing/invalid <c>sub</c>, missing/blank <c>sstamp</c>, user missing
+    /// or disabled or locked, organization missing or disabled, SecurityStamp
+    /// change) yields a neutral 401 without indicating the reason. The
+    /// response is marked non-storable so intermediaries and browsers cannot
+    /// serve a cached copy in place of the authoritative DB check.
+    /// </summary>
+    [HttpGet("me")]
+    [Authorize]
+    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
+    public async Task<IActionResult> MeAsync(
+        [FromServices] CurrentUserService currentUserService,
+        CancellationToken cancellationToken)
+    {
+        var subjectClaim = User.FindFirst(OpsFlowClaimTypes.Subject)?.Value;
+        if (string.IsNullOrWhiteSpace(subjectClaim)
+            || !Guid.TryParse(subjectClaim, out var userId)
+            || userId == Guid.Empty)
+        {
+            return UnauthorizedWithoutBody();
+        }
+
+        var presentedSecurityStamp = User.FindFirst(OpsFlowClaimTypes.SecurityStamp)?.Value;
+        if (string.IsNullOrWhiteSpace(presentedSecurityStamp))
+        {
+            return UnauthorizedWithoutBody();
+        }
+
+        var result = await currentUserService.GetCurrentUserAsync(
+            new CurrentUserQuery(userId, presentedSecurityStamp),
+            cancellationToken);
+
+        if (!result.Succeeded || result.User is null)
+        {
+            return UnauthorizedWithoutBody();
+        }
+
+        var user = result.User;
+        var response = new LoginUserResponse(
+            user.UserId,
+            user.Email,
+            user.DisplayName,
+            user.OrganizationId,
+            user.OrganizationName,
+            user.Roles);
+
+        return Ok(response);
     }
 
     private EmptyResult UnauthorizedWithoutBody()
