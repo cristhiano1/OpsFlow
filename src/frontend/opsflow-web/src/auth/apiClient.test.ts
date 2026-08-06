@@ -80,13 +80,40 @@ function stubFetch(): FetchHarness {
   return harness
 }
 
+// Passthrough fake for `navigator.locks` so refreshOnce's cross-tab
+// coordination has an available implementation. apiClient tests do not care
+// about lock ordering — they only need refresh to be able to run. The
+// dedicated coordination tests live in singleFlightRefresh.test.ts.
+function installPassthroughLocks(): void {
+  Object.defineProperty(navigator, 'locks', {
+    configurable: true,
+    value: {
+      request: async (_name: string, ...args: unknown[]) => {
+        const callback = (typeof args[0] === 'function' ? args[0] : args[1]) as (
+          lock: unknown,
+        ) => Promise<unknown>
+        return await callback({})
+      },
+    },
+  })
+}
+
+function uninstallLocks(): void {
+  Object.defineProperty(navigator, 'locks', {
+    configurable: true,
+    value: undefined,
+  })
+}
+
 beforeEach(() => {
   _resetSessionStoreForTests()
   _resetSingleFlightForTests()
+  installPassthroughLocks()
 })
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  uninstallLocks()
 })
 
 describe('apiClient bearer injection', () => {
