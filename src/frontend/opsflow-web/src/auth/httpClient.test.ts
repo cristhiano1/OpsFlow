@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { httpRequest } from './httpClient'
+import { httpRequest, type HttpRequest } from './httpClient'
 
 interface FetchCall {
   input: RequestInfo | URL
@@ -89,6 +89,30 @@ describe('httpClient — raw body pass-through', () => {
     })
     const init = calls[0]!.init!
     expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/x-www-form-urlencoded')
+  })
+
+  it('passes a URLSearchParams body verbatim and does NOT auto-set Content-Type', async () => {
+    const params = new URLSearchParams([['a', '1'], ['b', '2']])
+    await httpRequest({ path: '/x', method: 'POST', body: params })
+    const init = calls[0]!.init!
+    // The same URLSearchParams reference reaches fetch — fetch itself supplies
+    // application/x-www-form-urlencoded when it serialises the body.
+    expect(init.body).toBe(params)
+    expect((init.headers as Record<string, string>)['Content-Type']).toBeUndefined()
+  })
+})
+
+describe('httpClient — streaming bodies are structurally excluded', () => {
+  // Compile-time regression guard: if a future edit ever widens
+  // HttpRequest['body'] back to include ReadableStream (or the full
+  // BodyInit), the directive on the assignment below will stop matching a
+  // real type error and tsc will flag it as unused, failing the build.
+  // Streaming request bodies would otherwise trigger the `duplex: 'half'`
+  // TypeError in some fetch runtimes.
+  it('type-check: ReadableStream is NOT assignable to HttpRequest.body', () => {
+    // @ts-expect-error - ReadableStream must be excluded from HttpRequest bodies.
+    const _invalid: HttpRequest = { path: '/x', body: new ReadableStream() }
+    void _invalid
   })
 })
 

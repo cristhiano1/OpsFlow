@@ -514,9 +514,9 @@ describe('apiClient terminal-401 token-identity guard', () => {
 
 describe('apiClient body type contract (replayable only)', () => {
   // Compile-time regression guard: if a future edit ever widens
-  // ApiRequest['body'] back to include ReadableStream, this line will stop
-  // producing a type error and the @ts-expect-error comment will itself
-  // fail to compile under `tsc -b` (run as part of `npm run build`).
+  // ApiRequest['body'] back to include ReadableStream, the directive on the
+  // assignment below will stop matching a real type error and tsc will flag
+  // it as unused, failing the build.
   it('type-check: ReadableStream is NOT assignable to ApiRequest.body', () => {
     // @ts-expect-error - ReadableStream must be excluded from ApiRequest bodies.
     const _invalid: ApiRequest = { path: '/x', body: new ReadableStream() }

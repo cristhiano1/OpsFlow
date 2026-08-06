@@ -44,11 +44,14 @@ const AUTH_EXEMPT_PATHS: ReadonlySet<string> = new Set([
   AUTH_LOGOUT_PATH,
 ])
 
-// apiClient narrows HttpRequest.body from the full `BodyInit` down to
-// `XMLHttpRequestBodyInit` — the replayable subset defined in lib.dom.d.ts
-// (Blob | BufferSource | FormData | URLSearchParams | string). This
-// structurally excludes `ReadableStream`, whose one-shot nature would make
-// a post-refresh retry silently send an empty body.
+// apiClient re-declares body explicitly as `XMLHttpRequestBodyInit` (the
+// non-streaming replayable subset: Blob | BufferSource | FormData |
+// URLSearchParams | string). httpClient's body is now the same type after
+// its own narrowing, so this restatement is structurally redundant — kept
+// intentionally so the authenticated-retry contract remains self-documenting
+// at the client that actually needs it: a reader of ApiRequest sees the
+// invariant "bodies here are replayable" without having to trace it through
+// the transport module. `ReadableStream` is excluded at both layers.
 export interface ApiRequest extends Omit<HttpRequest, 'body'> {
   body?: XMLHttpRequestBodyInit | null
 }
@@ -104,13 +107,17 @@ function maybeInvalidateForTerminal401(retryTokenUsed: string | null): void {
 }
 
 export async function apiFetch(request: ApiRequest): Promise<Response> {
-  // Belt-and-suspenders runtime guard: the TypeScript contract already
-  // excludes ReadableStream, but an untyped caller (or an `as any` cast)
-  // could still slip one through. `typeof ReadableStream !== 'undefined'`
-  // avoids failing in exotic runtimes where the global does not exist.
+  // Belt-and-suspenders runtime guard: BOTH httpClient and apiClient
+  // exclude ReadableStream at the type level, but an untyped caller (or an
+  // `as any` cast) could still slip one through. `typeof ReadableStream
+  // !== 'undefined'` avoids failing in exotic runtimes where the global
+  // does not exist. The `as unknown` cast is necessary because
+  // ApiRequest.body's union no longer overlaps with ReadableStream, so TS
+  // would otherwise reject the `instanceof` as a comparison against a
+  // disjoint type.
   if (
     typeof ReadableStream !== 'undefined'
-    && request.body instanceof ReadableStream
+    && (request.body as unknown) instanceof ReadableStream
   ) {
     throw new Error(
       'apiClient does not accept ReadableStream bodies — bodies must be replayable so a post-refresh retry can safely re-send them.',

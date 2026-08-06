@@ -1,6 +1,6 @@
 // Low-level HTTP transport. Distinguishes JSON payloads from native fetch
-// bodies so that future document/upload flows (FormData, Blob, streams) work
-// without any JSON-shaped assumption:
+// bodies so that document/upload flows (FormData, Blob, URLSearchParams,
+// BufferSource, strings) work without any JSON-shaped assumption:
 //
 //   - `json`   → JSON.stringify + auto Content-Type: application/json (unless
 //                the caller supplied one, in any casing).
@@ -9,6 +9,13 @@
 //                multipart/form-data boundary automatically.
 //
 // `json` and `body` are mutually exclusive at runtime.
+//
+// ReadableStream request bodies are DELIBERATELY EXCLUDED from this contract.
+// Some fetch implementations require an undocumented `duplex: 'half'`
+// RequestInit option and will throw TypeError before sending when a stream
+// body is supplied without it. This codebase has no streaming-upload
+// requirement, so the safest thing is to forbid streams at the type level
+// and never reach that code path.
 //
 // This layer intentionally knows NOTHING about bearer tokens, 401 handling,
 // or the refresh flow — those concerns live in apiClient.ts and
@@ -21,10 +28,13 @@ export interface HttpRequest {
   // JSON payload. Will be JSON.stringify-ed and served with
   // `Content-Type: application/json` unless the caller already set one.
   json?: unknown
-  // Native fetch body (FormData / Blob / string / URLSearchParams / etc.).
-  // Passed to fetch verbatim; Content-Type is left to the caller (or, for
-  // FormData, to the browser which supplies the multipart boundary).
-  body?: BodyInit | null
+  // Native fetch body, restricted to the NON-STREAMING subset defined in
+  // lib.dom.d.ts as `XMLHttpRequestBodyInit`
+  // (= Blob | BufferSource | FormData | URLSearchParams | string). Passed to
+  // fetch verbatim; Content-Type is left to the caller (or, for FormData,
+  // to the browser which supplies the multipart boundary). See the note
+  // above on why ReadableStream is not accepted here.
+  body?: XMLHttpRequestBodyInit | null
   headers?: Record<string, string>
   credentials?: RequestCredentials
   signal?: AbortSignal
