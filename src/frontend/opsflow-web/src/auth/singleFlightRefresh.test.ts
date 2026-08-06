@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { AUTH_REFRESH_PATH } from './authApi'
+import { AUTH_COOKIE_LOCK_NAME } from './authCookieLock'
 import type { LoginResponse } from './contracts'
 import {
   _resetSessionStoreForTests,
@@ -179,9 +180,11 @@ describe('singleFlightRefresh — in-tab single-flight', () => {
     expect(r2).toEqual(r1)
     expect(r3).toEqual(r1)
     expect(getAccessToken()).toBe('t-1')
-    // Exactly one lock acquisition regardless of concurrent callers.
+    // Exactly one lock acquisition regardless of concurrent callers, and
+    // it uses the SHARED constant — proving refresh serialises through the
+    // same mutex as login and logout.
     expect(defaultLockHarness!.requestCalls).toHaveLength(1)
-    expect(defaultLockHarness!.requestCalls[0]).toEqual({ name: 'opsflow.auth.refresh' })
+    expect(defaultLockHarness!.requestCalls[0]).toEqual({ name: AUTH_COOKIE_LOCK_NAME })
   })
 
   it('clears the pending slot on success so a later call issues a fresh refresh', async () => {
@@ -270,7 +273,7 @@ describe('singleFlightRefresh — cross-tab Web Locks coordination', () => {
     // The lock is requested immediately with the fixed name; the request is
     // now suspended waiting for acquireGate. Because the lock's callback has
     // not yet been invoked, /refresh has NOT been called.
-    expect(gatedLock.requestCalls).toEqual([{ name: 'opsflow.auth.refresh' }])
+    expect(gatedLock.requestCalls).toEqual([{ name: AUTH_COOKIE_LOCK_NAME }])
     expect(harness.calls).toHaveLength(0)
 
     // Release the lock and await the whole refresh cycle. Awaiting the

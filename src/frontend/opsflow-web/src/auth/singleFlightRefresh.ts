@@ -1,12 +1,15 @@
 // Single-flight refresh coordinator. At most ONE POST /api/v1/auth/refresh
 // may be in flight PER TAB (module-scoped `pending`) AND at most one refresh
-// may execute at a time PER ORIGIN (Web Locks API name
-// `opsflow.auth.refresh`). Concurrent callers in the same tab share the same
-// in-flight promise, and concurrent tabs on the same origin serialize behind
-// the browser lock — so N tabs × M concurrent callers still produces at most
-// one POST /refresh per lock acquisition. The shared HttpOnly refresh cookie
-// therefore rotates cleanly instead of racing itself, which would otherwise
-// trigger the backend's refresh-token reuse-detection revocation.
+// may execute at a time PER ORIGIN (via the shared `withAuthCookieLock`
+// mutex). Concurrent callers in the same tab share the same in-flight
+// promise, and concurrent tabs on the same origin serialize behind the
+// browser lock — so N tabs × M concurrent callers still produces at most
+// one POST /refresh per lock acquisition. The shared HttpOnly refresh
+// cookie therefore rotates cleanly instead of racing itself, which would
+// otherwise trigger the backend's refresh-token reuse-detection revocation.
+//
+// The same lock ALSO serialises login and logout (which write and delete
+// the same cookie). See `authCookieLock.ts` for the single shared name.
 //
 // Epoch guard: the session generation is TAB-LOCAL memory. It is captured
 // before the refresh is queued behind the lock and re-checked AFTER
@@ -19,14 +22,15 @@
 // Any generation mismatch discards the incoming token instead of restoring
 // it.
 //
-// Availability policy: if `navigator.locks` is unavailable, or if lock
-// acquisition/execution throws, we return `unavailable` WITHOUT issuing
-// POST /refresh. This is intentionally fail-closed — silently falling back
-// to an uncoordinated refresh across tabs would race the shared HttpOnly
-// cookie. Session state is preserved so a later call can retry when the
-// runtime recovers.
+// Availability policy: if `withAuthCookieLock` reports the Web Locks API
+// as unavailable (or the lock request itself throws), we return
+// `unavailable` WITHOUT issuing POST /refresh. This is intentionally
+// fail-closed — silently falling back to an uncoordinated refresh across
+// tabs would race the shared HttpOnly cookie. Session state is preserved
+// so a later call can retry when the runtime recovers.
 
 import { refresh as authRefresh } from './authApi'
+import { withAuthCookieLock } from './authCookieLock'
 import type { RefreshResponse } from './contracts'
 import { currentGeneration, setAccessToken } from './sessionStore'
 
@@ -41,30 +45,11 @@ export type RefreshResult =
   // Session state is unchanged; a later call may retry.
   | { kind: 'unavailable'; error: unknown }
 
-// Fixed same-origin lock name. Every tab of this origin acquires the SAME
-// name, giving mutual exclusion across contexts.
-const REFRESH_LOCK_NAME = 'opsflow.auth.refresh'
-
 let pending: Promise<RefreshResult> | null = null
 
 async function runRefreshCycle(capturedGeneration: number): Promise<RefreshResult> {
   try {
-    // Fail-closed availability check for navigator.locks. lib.dom.d.ts
-    // types `navigator.locks` as always-present, but in reality it is
-    // absent in insecure contexts, non-Window realms, and older browsers.
-    const locks = typeof navigator === 'undefined'
-      ? undefined
-      : (navigator as Navigator & { locks?: LockManager }).locks
-    if (locks === undefined || typeof locks.request !== 'function') {
-      return {
-        kind: 'unavailable',
-        error: new Error(
-          'navigator.locks is not available; refresh cannot be safely coordinated across tabs.',
-        ),
-      }
-    }
-
-    return await locks.request(REFRESH_LOCK_NAME, async (): Promise<RefreshResult> => {
+    return await withAuthCookieLock(async (): Promise<RefreshResult> => {
       // Re-check generation NOW that we hold the cross-tab lock. Only a
       // LOCAL logout could have bumped the generation while we waited —
       // sibling-tab refreshes are serialised behind the same lock and do
@@ -76,9 +61,9 @@ async function runRefreshCycle(capturedGeneration: number): Promise<RefreshResul
 
       const outcome = await authRefresh()
 
-      // Post-refresh generation check (existing behavior). Same rationale
-      // as above: only a LOCAL logout during the network round-trip could
-      // have bumped the generation.
+      // Post-refresh generation check. Same rationale as above: only a
+      // LOCAL logout during the network round-trip could have bumped the
+      // generation.
       if (currentGeneration() !== capturedGeneration) {
         return { kind: 'stale' }
       }
@@ -101,7 +86,8 @@ async function runRefreshCycle(capturedGeneration: number): Promise<RefreshResul
       return { kind: 'unavailable', error: outcome.error }
     })
   } catch (error) {
-    // Lock acquisition itself failed. Session state untouched.
+    // Lock acquisition itself failed (or the operation threw). Session
+    // state untouched.
     return { kind: 'unavailable', error }
   }
 }
