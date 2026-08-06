@@ -153,10 +153,13 @@ public sealed class AuthenticationController : ControllerBase
     /// mismatch between the presented JWT and the current DB state
     /// (missing/invalid <c>sub</c>, missing/blank <c>sstamp</c>, user missing
     /// or disabled or locked, organization missing or disabled, SecurityStamp
-    /// change) yields a neutral 401 without indicating the reason.
+    /// change) yields a neutral 401 without indicating the reason. The
+    /// response is marked non-storable so intermediaries and browsers cannot
+    /// serve a cached copy in place of the authoritative DB check.
     /// </summary>
     [HttpGet("me")]
     [Authorize]
+    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
     public async Task<IActionResult> MeAsync(
         [FromServices] CurrentUserService currentUserService,
         CancellationToken cancellationToken)

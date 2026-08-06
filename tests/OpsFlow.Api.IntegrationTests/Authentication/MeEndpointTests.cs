@@ -209,6 +209,24 @@ public sealed class MeEndpointTests : IDisposable
     }
 
     [Fact]
+    public async Task Me_successful_response_is_non_storable()
+    {
+        var (user, _) = await SeedActiveUserAsync();
+        var session = await LoginAsync(user.Email!);
+
+        using var response = await _client.SendAsync(BuildMeRequest(session.AccessToken));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        // The /me response reflects authoritative DB state and must never be
+        // reused from an HTTP cache. `no-store` is the load-bearing directive;
+        // any additional directives emitted by ResponseCache are accepted.
+        Assert.NotNull(response.Headers.CacheControl);
+        Assert.True(
+            response.Headers.CacheControl!.NoStore,
+            "GET /me must set Cache-Control: no-store so intermediaries and browsers cannot serve a cached copy.");
+    }
+
+    [Fact]
     public async Task Me_does_not_mutate_refresh_cookie()
     {
         var (user, _) = await SeedActiveUserAsync();
