@@ -12,6 +12,12 @@ import {
 } from './authApi'
 import { AUTH_COOKIE_LOCK_NAME } from './authCookieLock'
 import type { LoginResponse, LoginUserResponse } from './contracts'
+import { SESSION_EPOCH_STORAGE_KEY, _resetSessionEpochForTests } from './sessionEpoch'
+
+// Raw view of what is actually stored under the epoch key.
+function storedEpoch(): string | null {
+  return localStorage.getItem(SESSION_EPOCH_STORAGE_KEY)
+}
 
 interface MockFetchCall {
   input: RequestInfo | URL
@@ -127,11 +133,17 @@ beforeEach(() => {
   // tests below replace it with a gated / throwing / missing stub.
   defaultLockHarness = makeFakeLockManager()
   installFakeLocks(defaultLockHarness.manager)
+  // login/logout now touch the shared epoch (localStorage). Start clean so
+  // each test observes only its own rotation.
+  _resetSessionEpochForTests()
+  localStorage.clear()
 })
 
 afterEach(() => {
+  vi.restoreAllMocks()
   vi.unstubAllGlobals()
   uninstallLocks()
+  localStorage.clear()
   defaultLockHarness = null
 })
 
@@ -146,7 +158,11 @@ describe('authApi.login', () => {
 
     const result = await login({ email: 'user@test.local', password: 'pw' })
 
-    expect(result).toEqual({ kind: 'success', data: sampleLogin })
+    expect(result.kind).toBe('success')
+    if (result.kind === 'success') {
+      expect(result.data).toEqual(sampleLogin)
+      expect(typeof result.epoch).toBe('string')
+    }
     expect(harness.calls).toHaveLength(1)
     const call = harness.calls[0]!
     expect(call.input).toBe(AUTH_LOGIN_PATH)
@@ -388,5 +404,314 @@ describe('authApi.refresh — low-level primitive (does NOT acquire the cookie l
     expect(fetchHarness.calls).toHaveLength(1)
     expect(fetchHarness.calls[0]!.input).toBe(AUTH_REFRESH_PATH)
     expect(defaultLockHarness!.requestCalls).toHaveLength(0)
+  })
+
+  it('does NOT rotate the shared session epoch (refresh keeps the SAME logical session)', async () => {
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, 'epoch-before')
+    const fetchHarness = stubFetch()
+    fetchHarness.setNext(jsonResponse(sampleLogin, 200))
+
+    await refresh()
+
+    expect(storedEpoch()).toBe('epoch-before')
+  })
+})
+
+// ────────────────────────────────────────────────────────────────────────
+// authApi.login — session epoch rotation
+// ────────────────────────────────────────────────────────────────────────
+
+describe('authApi.login — session epoch rotation', () => {
+  it('rotates the shared epoch to a NEW value on a successful login', async () => {
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, 'epoch-before')
+    const fetchHarness = stubFetch()
+    fetchHarness.setNext(jsonResponse(sampleLogin, 200))
+
+    const result = await login({ email: 'u', password: 'p' })
+
+    expect(result.kind).toBe('success')
+    const after = storedEpoch()
+    expect(after).not.toBeNull()
+    expect(after).not.toBe('epoch-before')
+  })
+
+  it('rotates the epoch EVEN when the same account logs in again (new session boundary)', async () => {
+    // Establish an epoch as if this account were already logged in.
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, 'epoch-existing')
+    const fetchHarness = stubFetch()
+    fetchHarness.setNext(jsonResponse(sampleLogin, 200)) // same account (sampleUser)
+
+    await login({ email: 'user@test.local', password: 'pw' })
+
+    expect(storedEpoch()).not.toBe('epoch-existing')
+  })
+
+  it('does NOT rotate the epoch on 401 invalid-credentials', async () => {
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, 'epoch-before')
+    const fetchHarness = stubFetch()
+    fetchHarness.setNext(new Response(null, { status: 401 }))
+
+    const result = await login({ email: 'x', password: 'y' })
+
+    expect(result.kind).toBe('invalid-credentials')
+    expect(storedEpoch()).toBe('epoch-before')
+  })
+
+  it('does NOT rotate the epoch on 400 validation-failed', async () => {
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, 'epoch-before')
+    const fetchHarness = stubFetch()
+    fetchHarness.setNext(new Response(null, { status: 400 }))
+
+    const result = await login({ email: 'x', password: 'y' })
+
+    expect(result.kind).toBe('validation-failed')
+    expect(storedEpoch()).toBe('epoch-before')
+  })
+
+  it('fails closed with unavailable and ZERO POST /login when epoch storage is unavailable', async () => {
+    const fetchHarness = stubFetch()
+    fetchHarness.setNext(jsonResponse(sampleLogin, 200))
+    // Break epoch storage: the pre-POST precommit (rotateEpoch) throws.
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('QuotaExceededError')
+    })
+
+    const result = await login({ email: 'u', password: 'p' })
+
+    expect(result.kind).toBe('unavailable')
+    expect(fetchHarness.calls).toHaveLength(0)
+  })
+})
+
+// ────────────────────────────────────────────────────────────────────────
+// authApi — precommit epoch protocol (OLD → NEXT → HTTP → keep/rollback)
+// ────────────────────────────────────────────────────────────────────────
+
+describe('authApi.login — precommit protocol', () => {
+  // Test F: NEXT is written BEFORE the login POST.
+  it('writes NEXT to the shared epoch BEFORE dispatching POST /login (precommit ordering)', async () => {
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, 'epoch-before')
+    const order: string[] = []
+    const realSet = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
+      this: Storage,
+      key: string,
+      value: string,
+    ) {
+      if (key === SESSION_EPOCH_STORAGE_KEY) order.push('epoch-write')
+      return realSet.call(this, key, value)
+    })
+    const fetchHarness = stubFetch()
+    // The fetch mock records the POST /login dispatch.
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      order.push('login-post')
+      void input
+      return jsonResponse(sampleLogin, 200)
+    }))
+    void fetchHarness
+
+    const result = await login({ email: 'u', password: 'p' })
+
+    expect(result.kind).toBe('success')
+    expect(order[0]).toBe('epoch-write')
+    expect(order.indexOf('epoch-write')).toBeLessThan(order.indexOf('login-post'))
+  })
+
+  // Test G: success KEEPS NEXT, returns it, and needs NO post-success write.
+  it('keeps NEXT and returns the committed epoch; exactly ONE epoch write occurs (no post-success write)', async () => {
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, 'epoch-before')
+    let epochWrites = 0
+    const realSet = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
+      this: Storage,
+      key: string,
+      value: string,
+    ) {
+      if (key === SESSION_EPOCH_STORAGE_KEY) epochWrites += 1
+      return realSet.call(this, key, value)
+    })
+    const fetchHarness = stubFetch()
+    fetchHarness.setNext(jsonResponse(sampleLogin, 200))
+
+    const result = await login({ email: 'u', password: 'p' })
+
+    expect(result.kind).toBe('success')
+    if (result.kind === 'success') {
+      // The committed epoch is exactly what remains in storage.
+      expect(result.epoch).toBe(storedEpoch())
+      expect(result.epoch).not.toBe('epoch-before')
+    }
+    // Precommit is the ONLY epoch write — nothing written after the 200.
+    expect(epochWrites).toBe(1)
+  })
+
+  // Test H: a 401 rolls the epoch back to OLD.
+  it('rolls the epoch back to OLD on a failed (401) login', async () => {
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, 'epoch-old')
+    const fetchHarness = stubFetch()
+    fetchHarness.setNext(new Response(null, { status: 401 }))
+
+    const result = await login({ email: 'x', password: 'y' })
+
+    expect(result.kind).toBe('invalid-credentials')
+    expect(storedEpoch()).toBe('epoch-old')
+  })
+
+  // Test I(1) — AMBIGUOUS network/transport failure after precommit: KEEP NEXT,
+  // never roll back (the Set-Cookie may already have been processed).
+  it('KEEPS NEXT (no rollback) on a network failure after dispatch', async () => {
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, 'epoch-old')
+    let precommitted: string | null = null
+    // Capture the NEXT value the precommit wrote, to prove it is kept.
+    const realSet = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
+      this: Storage,
+      key: string,
+      value: string,
+    ) {
+      if (key === SESSION_EPOCH_STORAGE_KEY) precommitted = value
+      return realSet.call(this, key, value)
+    })
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('network down')
+    }))
+
+    const result = await login({ email: 'u', password: 'p' })
+
+    expect(result.kind).toBe('unavailable')
+    // NEXT kept — OLD is NOT restored, because a network throw does not prove
+    // the cookie was left unchanged.
+    expect(storedEpoch()).not.toBe('epoch-old')
+    expect(storedEpoch()).toBe(precommitted)
+  })
+
+  // Test 1 (section 2) — SUCCESS status then JSON parse failure: KEEP NEXT.
+  it('KEEPS NEXT (no rollback) on a 200 whose JSON parsing fails', async () => {
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, 'epoch-old')
+    // 200 with a body that is not valid JSON → response.json() throws.
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<<not json>>', {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })))
+
+    const result = await login({ email: 'u', password: 'p' })
+
+    expect(result.kind).toBe('unavailable')
+    // Set-Cookie was processed on the 200 → NEXT is committed; OLD must NOT
+    // be restored (would strand cookie=NEW / epoch=OLD).
+    expect(storedEpoch()).not.toBe('epoch-old')
+    expect(storedEpoch()).not.toBeNull()
+  })
+
+  // Test 6 (section 2) — rollback failure on a rollback-ELIGIBLE path (401):
+  // OLD must not be falsely advertised; outcome is unavailable.
+  it('fails closed (unavailable) when rollback fails on a rollback-eligible 401', async () => {
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, 'epoch-old')
+    // Allow the precommit write (call #1) but throw on the rollback (call #2).
+    let n = 0
+    const realSet = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
+      this: Storage,
+      key: string,
+      value: string,
+    ) {
+      n += 1
+      if (n >= 2) throw new DOMException('denied')
+      return realSet.call(this, key, value)
+    })
+    const fetchHarness = stubFetch()
+    fetchHarness.setNext(new Response(null, { status: 401 }))
+
+    const result = await login({ email: 'x', password: 'y' })
+
+    // A 401 is rollback-eligible, but the rollback write failed → we must NOT
+    // return invalid-credentials (which would imply OLD is intact). Fail closed.
+    expect(result.kind).toBe('unavailable')
+    expect(storedEpoch()).not.toBe('epoch-old')
+    expect(storedEpoch()).not.toBeNull()
+  })
+})
+
+describe('authApi.logout — precommit protocol', () => {
+  // Test J: successful logout keeps NEXT.
+  it('keeps NEXT on a successful (204) logout', async () => {
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, 'epoch-old')
+    const okFetch = stubFetch()
+    okFetch.setNext(new Response(null, { status: 204 }))
+
+    const ok = await logout()
+
+    expect(ok).toEqual({ kind: 'success' })
+    expect(storedEpoch()).not.toBe('epoch-old')
+  })
+
+  // Test 4 (section 2) — AMBIGUOUS transport failure: KEEP NEXT, fail closed.
+  // Logout has no deliberate non-mutating failure status, so it NEVER rolls
+  // back after dispatch.
+  it('KEEPS NEXT (no rollback) on an ambiguous network failure after dispatch', async () => {
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, 'epoch-old')
+    let precommitted: string | null = null
+    const realSet = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
+      this: Storage,
+      key: string,
+      value: string,
+    ) {
+      if (key === SESSION_EPOCH_STORAGE_KEY) precommitted = value
+      return realSet.call(this, key, value)
+    })
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('network down')
+    }))
+
+    const result = await logout()
+
+    expect(result.kind).toBe('unavailable')
+    expect(storedEpoch()).not.toBe('epoch-old')
+    expect(storedEpoch()).toBe(precommitted)
+  })
+})
+
+// ────────────────────────────────────────────────────────────────────────
+// authApi.logout — session epoch rotation
+// ────────────────────────────────────────────────────────────────────────
+
+describe('authApi.logout — session epoch rotation', () => {
+  it('rotates the shared epoch to a NEW value on a successful logout', async () => {
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, 'epoch-before')
+    const fetchHarness = stubFetch()
+    fetchHarness.setNext(new Response(null, { status: 204 }))
+
+    const result = await logout()
+
+    expect(result).toEqual({ kind: 'success' })
+    const after = storedEpoch()
+    expect(after).not.toBeNull()
+    expect(after).not.toBe('epoch-before')
+  })
+
+  it('KEEPS NEXT (fails closed) when logout returns an unexpected status (no rollback-eligible failure)', async () => {
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, 'epoch-before')
+    const fetchHarness = stubFetch()
+    fetchHarness.setNext(new Response(null, { status: 500 }))
+
+    const result = await logout()
+
+    // A 500 is ambiguous — logout keeps NEXT rather than restoring OLD.
+    expect(result.kind).toBe('unavailable')
+    expect(storedEpoch()).not.toBe('epoch-before')
+  })
+
+  it('fails closed with unavailable and ZERO POST /logout when epoch storage is unavailable', async () => {
+    const fetchHarness = stubFetch()
+    fetchHarness.setNext(new Response(null, { status: 204 }))
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('QuotaExceededError')
+    })
+
+    const result = await logout()
+
+    expect(result.kind).toBe('unavailable')
+    expect(fetchHarness.calls).toHaveLength(0)
   })
 })

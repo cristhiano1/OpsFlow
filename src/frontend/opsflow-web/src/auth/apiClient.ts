@@ -5,37 +5,47 @@
 //   2. On 401, a single-flight refresh + exactly one retry with the fresh
 //      token. If the retry itself returns 401, the session is invalidated
 //      and the 401 is propagated — there is NO second refresh.
-//   3. Late-401 race guard: if the store's token has changed between the
-//      moment we captured our request's token and the moment its 401 arrives
-//      (i.e. another concurrent request already refreshed the session), we
-//      retry ONCE with the current token WITHOUT starting a second refresh.
-//   4. Temporary refresh failure (network / server unavailability) does NOT
-//      invalidate the session and does NOT return the original 401 as a
-//      resolved Response — it REJECTS the promise with an
-//      `ApiUnavailableError` so the caller can distinguish "backend said no"
-//      from "backend not reachable".
+//   3. Late-401 race guard: retry with the current token WITHOUT a second
+//      refresh — but ONLY if the originating session is still current (#7).
+//   4. Temporary refresh failure (network / server / storage unavailability)
+//      does NOT invalidate the session and does NOT return the original 401 as
+//      a resolved Response — it REJECTS with `ApiUnavailableError` so callers
+//      can distinguish "backend said no" from "cannot be evaluated".
 //   5. Terminal-401 invalidation uses TOKEN IDENTITY, not just generation.
-//      A retry that returns 401 only invalidates the session if the token
-//      currently in the store is still exactly the token used by that retry;
-//      otherwise a newer refresh already replaced it and must not be cleared.
 //   6. Request bodies are constrained to the REPLAYABLE subset of BodyInit
-//      (i.e. `XMLHttpRequestBodyInit` = Blob | BufferSource | FormData |
-//      URLSearchParams | string). ReadableStream is one-shot and cannot be
-//      safely re-read on a refresh retry, so it is excluded at the type
-//      level and rejected at runtime. Streaming authenticated uploads (if
-//      ever needed) would require an explicit body-factory API introduced
-//      in a later checkpoint.
+//      (`XMLHttpRequestBodyInit`); ReadableStream is excluded at type + runtime.
+//   7. CROSS-TAB SESSION-REPLACEMENT guard. BEFORE dispatching its first HTTP
+//      attempt, every non-exempt request reads the shared epoch and snapshots
+//      the local session (token + principal + BOUND epoch). Two gates:
+//        (a) PRE-DISPATCH: if this tab holds a token whose bound epoch no
+//            longer equals the (readable) shared epoch (a sibling already
+//            replaced the session), throw a typed SessionReplacedError with
+//            ZERO fetch — never a fabricated backend 401.
+//        (b) IN-FLIGHT: if the session is replaced AFTER dispatch, the
+//            late-401 / post-refresh retry is blocked because the originating
+//            epoch/principal no longer match.
+//      If the shared epoch cannot be READ, the whole request is rejected up
+//      front and NOTHING is dispatched — a conservative fail-closed. Capturing
+//      before the first attempt is essential: a sibling may replace the
+//      session while the request is in flight, so checking only after the 401
+//      would be too late.
 //
 // Only login / refresh / logout are exempt from the refresh-and-retry path so
 // that they cannot recursively trigger themselves. Every other endpoint —
 // including the authoritative /api/v1/auth/me — participates in the normal
-// bearer + retry flow. `apiClient` imports the exempt path constants from
-// `authApi`; the dependency graph is one-way (apiClient → authApi), so no
-// cycle is introduced.
+// bearer + retry flow.
 
 import { AUTH_LOGIN_PATH, AUTH_LOGOUT_PATH, AUTH_REFRESH_PATH } from './authApi'
 import { httpRequest, type HttpRequest } from './httpClient'
-import { getAccessToken, invalidateSession } from './sessionStore'
+import { readEpoch } from './sessionEpoch'
+import {
+  getAccessToken,
+  getPrincipal,
+  getSession,
+  invalidateSession,
+  samePrincipal,
+  type Principal,
+} from './sessionStore'
 import { refreshOnce } from './singleFlightRefresh'
 
 const AUTH_EXEMPT_PATHS: ReadonlySet<string> = new Set([
@@ -45,22 +55,18 @@ const AUTH_EXEMPT_PATHS: ReadonlySet<string> = new Set([
 ])
 
 // apiClient re-declares body explicitly as `XMLHttpRequestBodyInit` (the
-// non-streaming replayable subset: Blob | BufferSource | FormData |
-// URLSearchParams | string). httpClient's body is now the same type after
-// its own narrowing, so this restatement is structurally redundant — kept
-// intentionally so the authenticated-retry contract remains self-documenting
-// at the client that actually needs it: a reader of ApiRequest sees the
-// invariant "bodies here are replayable" without having to trace it through
-// the transport module. `ReadableStream` is excluded at both layers.
+// non-streaming replayable subset). Kept intentionally so the
+// authenticated-retry contract remains self-documenting; `ReadableStream`
+// is excluded at both layers.
 export interface ApiRequest extends Omit<HttpRequest, 'body'> {
   body?: XMLHttpRequestBodyInit | null
 }
 
-// Raised when a required refresh cannot complete for a non-authoritative
-// reason (network failure, unexpected server error). Distinct from a 401
-// Response so callers can distinguish "backend rejected the session" from
-// "backend was not reachable". Session state is guaranteed unchanged when
-// this is thrown.
+// Raised when a required refresh cannot complete — or the cross-tab safety
+// invariant cannot be evaluated — for a non-authoritative reason (network
+// failure, unexpected server error, cross-tab lock / epoch storage
+// unavailable). Distinct from a 401 Response. Session state is guaranteed
+// unchanged when this is thrown.
 export class ApiUnavailableError extends Error {
   readonly cause: unknown
 
@@ -71,17 +77,39 @@ export class ApiUnavailableError extends Error {
   }
 }
 
+// Raised when the cross-tab session-replacement invariant is SUCCESSFULLY
+// evaluated and found violated BEFORE dispatch — the local authenticated
+// session's bound epoch no longer equals the (readable) shared epoch, i.e. a
+// sibling tab replaced the session. Distinct from ApiUnavailableError (which
+// means the invariant could NOT be evaluated). apiClient throws this instead
+// of fabricating a backend 401 the server never produced. Throwing it mutates
+// no state — the sibling's session is left untouched.
+export class SessionReplacedError extends Error {
+  constructor() {
+    super('The local session was replaced by another tab before this request was dispatched.')
+    this.name = 'SessionReplacedError'
+  }
+}
+
+// The immutable identity of the logical session that originated a request,
+// captured BEFORE any HTTP attempt is dispatched. `epoch === null` means the
+// request carried no established session (cold start) — there is nothing to
+// protect, so those guards are skipped for it.
+interface OriginatingSession {
+  token: string | null
+  principal: Principal | null
+  epoch: string | null
+}
+
 interface Attempt {
   promise: Promise<Response>
   tokenUsed: string | null
 }
 
-// apiClient OWNS the Authorization header for its calls. Any caller-supplied
-// value (in any casing) is discarded before the request goes out, so that a
-// post-refresh retry is guaranteed to carry the current session token. Raw /
-// custom HTTP authorization belongs in httpClient, never in apiClient.
-function attemptWithCurrentToken(request: ApiRequest): Attempt {
-  const token = getAccessToken()
+// Dispatches the request with an EXPLICIT token (never re-reading the store),
+// stripping any caller-supplied Authorization header (in any casing) so the
+// bearer is fully owned by apiClient.
+function attemptWithToken(request: ApiRequest, token: string | null): Attempt {
   const headers: Record<string, string> = {}
   for (const [name, value] of Object.entries(request.headers ?? {})) {
     if (name.toLowerCase() !== 'authorization') {
@@ -97,6 +125,22 @@ function attemptWithCurrentToken(request: ApiRequest): Attempt {
   }
 }
 
+// True when the session that originated the request is STILL current. If the
+// epoch cannot be read now, we conservatively treat the session as no longer
+// current (block the retry) — two unreadable reads must never compare equal.
+function originatingSessionStillCurrent(origin: OriginatingSession): boolean {
+  if (origin.epoch !== null) {
+    const read = readEpoch()
+    if (read.status !== 'present' || read.epoch !== origin.epoch) {
+      return false
+    }
+  }
+  if (origin.principal !== null && !samePrincipal(getPrincipal(), origin.principal)) {
+    return false
+  }
+  return true
+}
+
 // Terminal-401 invalidation guard: only clear the session if the store still
 // holds the exact token that just failed. Prevents wiping a newer token that
 // a later refresh cycle installed while our retry was in flight.
@@ -107,14 +151,7 @@ function maybeInvalidateForTerminal401(retryTokenUsed: string | null): void {
 }
 
 export async function apiFetch(request: ApiRequest): Promise<Response> {
-  // Belt-and-suspenders runtime guard: BOTH httpClient and apiClient
-  // exclude ReadableStream at the type level, but an untyped caller (or an
-  // `as any` cast) could still slip one through. `typeof ReadableStream
-  // !== 'undefined'` avoids failing in exotic runtimes where the global
-  // does not exist. The `as unknown` cast is necessary because
-  // ApiRequest.body's union no longer overlaps with ReadableStream, so TS
-  // would otherwise reject the `instanceof` as a comparison against a
-  // disjoint type.
+  // Belt-and-suspenders runtime guard against one-shot ReadableStream bodies.
   if (
     typeof ReadableStream !== 'undefined'
     && (request.body as unknown) instanceof ReadableStream
@@ -126,20 +163,67 @@ export async function apiFetch(request: ApiRequest): Promise<Response> {
 
   const isAuthExempt = AUTH_EXEMPT_PATHS.has(request.path)
 
-  const first = attemptWithCurrentToken(request)
+  if (isAuthExempt) {
+    // Exempt endpoints never participate in refresh-and-retry. Inject the
+    // current bearer and pass through.
+    return await attemptWithToken(request, getAccessToken()).promise
+  }
+
+  // ── Capture the originating session BEFORE any fetch is dispatched. ──
+  // Order is load-bearing: read the shared epoch first, then snapshot the
+  // local session, THEN dispatch. If the epoch is unreadable we fail closed
+  // up front and dispatch NOTHING — no request, no late-401 path, no refresh.
+  const epochRead = readEpoch()
+  if (epochRead.status === 'unavailable') {
+    throw new ApiUnavailableError(
+      'Shared session epoch is unreadable; cannot evaluate cross-tab session safety.',
+      epochRead.error,
+    )
+  }
+  const session = getSession()
+
+  // Pre-dispatch bound-epoch check: if this tab holds an authenticated
+  // session, its token must be BOUND to the CURRENT shared epoch. The epoch was
+  // read successfully above (unavailable already threw ApiUnavailableError), so
+  // a mismatch here is an AUTHORITATIVELY-EVALUATED session replacement (the
+  // marker moved, or is `missing`). Reject with a typed SessionReplacedError
+  // and ZERO fetch — never fabricate a 401.
+  if (session.token !== null) {
+    const boundStillCurrent =
+      epochRead.status === 'present'
+      && session.boundEpoch !== null
+      && epochRead.epoch === session.boundEpoch
+    if (!boundStillCurrent) {
+      throw new SessionReplacedError()
+    }
+  }
+
+  const origin: OriginatingSession = {
+    token: session.token,
+    principal: session.principal,
+    epoch: session.token !== null
+      ? session.boundEpoch
+      : (epochRead.status === 'present' ? epochRead.epoch : null),
+  }
+
+  // Only now dispatch, using the captured token.
+  const first = attemptWithToken(request, origin.token)
   const firstResponse = await first.promise
 
-  if (firstResponse.status !== 401 || isAuthExempt) {
+  if (firstResponse.status !== 401) {
     return firstResponse
   }
 
-  // Late-401 race: another concurrent request may have already refreshed the
-  // session between the moment we captured `first.tokenUsed` and the moment
-  // this 401 arrives. If so, skip our own refresh and retry once with the
-  // current token.
+  // Late-401 race: another concurrent request may have refreshed the session
+  // between capture and this 401. Retry with the current token ONLY if the
+  // originating session is still current — a token change alone no longer
+  // proves "same session refreshed"; it may mean the session changed.
   const tokenNowInStore = getAccessToken()
-  if (tokenNowInStore !== null && tokenNowInStore !== first.tokenUsed) {
-    const retry = attemptWithCurrentToken(request)
+  if (tokenNowInStore !== null && tokenNowInStore !== origin.token) {
+    if (!originatingSessionStillCurrent(origin)) {
+      return firstResponse
+    }
+    const retry = attemptWithToken(request, tokenNowInStore)
     const retryResponse = await retry.promise
     if (retryResponse.status === 401) {
       maybeInvalidateForTerminal401(retry.tokenUsed)
@@ -147,19 +231,18 @@ export async function apiFetch(request: ApiRequest): Promise<Response> {
     return retryResponse
   }
 
-  if (tokenNowInStore === null && first.tokenUsed !== null) {
+  if (tokenNowInStore === null && origin.token !== null) {
     // Session was invalidated between our attempt and now (logout or another
     // terminal path). Propagate the 401 without initiating a new refresh.
     return firstResponse
   }
 
-  // Normal refresh-and-retry cycle.
-  const refreshOutcome = await refreshOnce()
+  // Normal refresh-and-retry cycle. Pass the captured epoch AND principal so
+  // refreshOnce rejects — before installing anything — a refresh that would
+  // target a sibling-replaced session or a different account.
+  const refreshOutcome = await refreshOnce(origin.epoch, origin.principal)
 
   if (refreshOutcome.kind === 'unavailable') {
-    // Connectivity / unexpected server failure. Session state is untouched
-    // (no clear, no generation bump). Surface a typed error so the caller
-    // can render "temporarily unavailable" instead of "signed out".
     throw new ApiUnavailableError(
       'Session refresh could not be completed; session state unchanged.',
       refreshOutcome.error,
@@ -167,26 +250,28 @@ export async function apiFetch(request: ApiRequest): Promise<Response> {
   }
 
   if (refreshOutcome.kind === 'unauthenticated') {
-    // Real 401 from /refresh — session is genuinely gone.
-    maybeInvalidateForTerminal401(first.tokenUsed)
+    maybeInvalidateForTerminal401(origin.token)
     return firstResponse
   }
 
-  if (refreshOutcome.kind === 'stale') {
-    // Someone else already invalidated / replaced the session — do NOT
-    // invalidate again. Propagate the original 401 so the caller sees the
-    // authoritative failure.
+  if (refreshOutcome.kind === 'stale' || refreshOutcome.kind === 'session-replaced') {
+    // A LOCAL logout ('stale') or a CROSS-TAB session replacement / principal
+    // mismatch ('session-replaced') superseded this request. refreshOnce did
+    // NOT install any foreign token. Do NOT invalidate and do NOT retry.
     return firstResponse
   }
 
-  // refreshOutcome.kind === 'refreshed' — retry once with the fresh token.
-  const retry = attemptWithCurrentToken(request)
+  // refreshOutcome.kind === 'refreshed'. refreshOnce already rejected a
+  // mismatched principal or epoch BEFORE installing, so the store holds a
+  // token for the originating session. Re-verify as belt-and-suspenders.
+  if (!originatingSessionStillCurrent(origin)) {
+    return firstResponse
+  }
+
+  const retry = attemptWithToken(request, getAccessToken())
   const retryResponse = await retry.promise
 
   if (retryResponse.status === 401) {
-    // Retry with a fresh token still rejected — the backend has invalidated
-    // the session (e.g. SecurityStamp rotated between refresh and retry).
-    // Guarded by TOKEN IDENTITY so a newer replacement token is preserved.
     maybeInvalidateForTerminal401(retry.tokenUsed)
   }
 

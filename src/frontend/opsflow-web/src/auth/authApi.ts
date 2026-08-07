@@ -11,15 +11,49 @@
 // invokes INSIDE the already-held lock, so it must NOT acquire the lock
 // itself (that would nest the lock and deadlock).
 //
-// Each function returns a discriminated union so callers can pattern-match
-// on outcomes without try/catch around every call. The `unavailable`
-// variant covers ANY non-authoritative failure (network error, unexpected
-// server response, thrown fetch, or cross-tab lock unavailability) — that
-// is, situations in which the frontend cannot treat the outcome as "the
-// backend said no" and therefore must NOT invalidate the session.
+// Session-epoch coordination — the PRECOMMIT protocol. A successful login or
+// logout REPLACES the browser-wide session, so both advance the shared epoch
+// (see sessionEpoch.ts) using an OLD → precommit NEXT → HTTP → keep-or-rollback
+// transition, all inside the shared auth-cookie lock:
+//
+//   1. read OLD (fail closed if it cannot be read)
+//   2. write NEXT to shared storage BEFORE the HTTP mutation (precommit)
+//   3. perform the cookie-mutating POST
+//   4. resolve the outcome by whether the refresh cookie could have changed:
+//
+// AMBIGUITY RULE. After the POST is dispatched, a thrown error or a
+// successful-status-then-parse-failure does NOT prove the browser did not
+// already process a Set-Cookie. Restoring OLD when the cookie actually became
+// NEW would leave cookie=NEW / epoch=OLD — unsafe. Therefore NEXT is ROLLED
+// BACK to OLD **only** for statuses the backend contract proves leave the
+// refresh cookie untouched. Anything ambiguous KEEPS NEXT and fails closed.
+//
+// Backend contract (AuthenticationController):
+//   • login writes Set-Cookie ONLY on the 200 path (append precedes Ok); the
+//     400 (ValidationProblem) and 401 (UnauthorizedWithoutBody) paths return
+//     BEFORE any append → cookie provably untouched → rollback-eligible.
+//     A 500 (thrown before append) is not deliberately produced by the
+//     controller and is ambiguous from the client → keep NEXT.
+//   • logout deletes the cookie ONLY immediately before returning 204; it has
+//     NO deliberate non-2xx status → nothing is rollback-eligible after
+//     dispatch → logout keeps NEXT for every post-dispatch outcome.
+//
+// Precommitting NEXT before the cookie changes means a sibling tab that
+// acquires the lock next can never observe the NEW cookie paired with the OLD
+// epoch. login additionally COMMUNICATES the committed epoch to its caller so
+// the caller can bind the local session atomically to token + principal + NEXT.
+// On a 200, once Set-Cookie has been processed NEXT is COMMITTED even if the
+// later `response.json()` throws — such a failure returns `unavailable` and
+// KEEPS NEXT; it never rolls back.
+//
+// The `unavailable` variant covers ANY non-authoritative failure (network
+// error, unexpected/ambiguous server response, thrown fetch, JSON parse
+// failure, cross-tab lock / epoch-storage / randomness unavailability, or a
+// failed rollback on a rollback-eligible path).
 
 import { withAuthCookieLock } from './authCookieLock'
 import { httpRequest } from './httpClient'
+import { readEpoch, restoreEpoch, rotateEpoch } from './sessionEpoch'
 import type {
   LoginRequest,
   LoginResponse,
@@ -34,37 +68,90 @@ export const AUTH_LOGOUT_PATH = `${AUTH_BASE}/logout`
 export const AUTH_ME_PATH = `${AUTH_BASE}/me`
 
 export type LoginOutcome =
-  | { kind: 'success'; data: LoginResponse }
+  // `epoch` is the committed NEXT marker; the caller binds the new local
+  // session to it atomically (token + principal + epoch).
+  | { kind: 'success'; data: LoginResponse; epoch: string }
   | { kind: 'invalid-credentials' }
   | { kind: 'validation-failed' }
   | { kind: 'unavailable'; error: unknown }
 
-// Login writes the browser-wide HttpOnly refresh cookie via Set-Cookie, so
-// the entire HTTP round-trip runs inside the shared auth-cookie lock. Any
-// concurrent refresh / logout waits for this lock, and vice versa, so the
-// Set-Cookie responses cannot race.
+// Login writes the browser-wide HttpOnly refresh cookie via Set-Cookie, so the
+// whole round-trip runs inside the shared auth-cookie lock and uses the
+// precommit protocol above. A new login is a new session boundary EVEN when
+// the same account logs back in (NEXT is always a fresh marker). Failed
+// credentials / validation roll the epoch back to OLD.
 export async function login(request: LoginRequest): Promise<LoginOutcome> {
   try {
     return await withAuthCookieLock(async (): Promise<LoginOutcome> => {
-      const response = await httpRequest({
-        path: AUTH_LOGIN_PATH,
-        method: 'POST',
-        json: request,
-        credentials: 'include',
-      })
-      if (response.status === 200) {
-        return { kind: 'success', data: (await response.json()) as LoginResponse }
+      // 1. Read OLD. If it cannot be read we cannot safely roll back, so we
+      //    fail closed BEFORE writing anything (ZERO POST /login).
+      const old = readEpoch()
+      if (old.status === 'unavailable') {
+        return { kind: 'unavailable', error: old.error }
       }
-      if (response.status === 401) return { kind: 'invalid-credentials' }
-      if (response.status === 400) return { kind: 'validation-failed' }
+
+      // 2. Precommit NEXT before the HTTP mutation. rotateEpoch throws if
+      //    storage / secure randomness is unavailable → ZERO POST /login.
+      let next: string
+      try {
+        next = rotateEpoch()
+      } catch (error) {
+        return { kind: 'unavailable', error }
+      }
+
+      // 3. HTTP mutation.
+      let response: Response
+      try {
+        response = await httpRequest({
+          path: AUTH_LOGIN_PATH,
+          method: 'POST',
+          json: request,
+          credentials: 'include',
+        })
+      } catch (error) {
+        // AMBIGUOUS after dispatch — the Set-Cookie may already have been
+        // processed. KEEP NEXT; never roll back to OLD.
+        return { kind: 'unavailable', error }
+      }
+
+      if (response.status === 200) {
+        // Set-Cookie for the NEW session has been processed → NEXT is
+        // COMMITTED. A later JSON parse failure keeps NEXT and never rolls
+        // back — it would otherwise strand cookie=NEW / epoch=OLD.
+        let data: LoginResponse
+        try {
+          data = (await response.json()) as LoginResponse
+        } catch (error) {
+          return { kind: 'unavailable', error }
+        }
+        return { kind: 'success', data, epoch: next }
+      }
+
+      // Rollback-eligible ONLY for statuses the backend proves leave the
+      // cookie untouched: 401 (UnauthorizedWithoutBody) and 400
+      // (ValidationProblem), both of which return before any Set-Cookie.
+      if (response.status === 401 || response.status === 400) {
+        if (!restoreEpoch(old)) {
+          // Rollback write failed — do NOT advertise OLD as intact.
+          return {
+            kind: 'unavailable',
+            error: new Error('login epoch rollback failed on a rollback-eligible status'),
+          }
+        }
+        return response.status === 401
+          ? { kind: 'invalid-credentials' }
+          : { kind: 'validation-failed' }
+      }
+
+      // Any other status is NOT proven non-mutating (e.g. an ambiguous 500).
+      // KEEP NEXT and fail closed.
       return {
         kind: 'unavailable',
         error: new Error(`Unexpected login status ${response.status}`),
       }
     })
   } catch (error) {
-    // Covers both `AuthLockUnavailableError` (lock unavailable → zero POST)
-    // and any thrown fetch (network error). Session state is unchanged.
+    // AuthLockUnavailableError / any unforeseen throw. Session unchanged.
     return { kind: 'unavailable', error }
   }
 }
@@ -115,26 +202,51 @@ export type LogoutOutcome =
   | { kind: 'unavailable'; error: unknown }
 
 // Logout deletes/revokes the same refresh-cookie state login and refresh
-// mutate, so it too runs inside the shared auth-cookie lock. If the lock is
-// unavailable we return `unavailable` and issue ZERO POST /logout requests;
-// the caller decides how to reconcile local session state.
+// mutate, so it too runs inside the shared auth-cookie lock and uses the same
+// OLD → precommit NEXT → HTTP → keep/rollback protocol. On success it keeps
+// NEXT (the marker change signals session removal to sibling tabs); on failure
+// it rolls back OLD, failing closed if the rollback fails.
 export async function logout(): Promise<LogoutOutcome> {
   try {
     return await withAuthCookieLock(async (): Promise<LogoutOutcome> => {
-      const response = await httpRequest({
-        path: AUTH_LOGOUT_PATH,
-        method: 'POST',
-        credentials: 'include',
-      })
-      if (response.status === 204 || response.status === 200) {
-        return { kind: 'success' }
+      // Read OLD only to fail closed if the epoch cannot be read at all.
+      const old = readEpoch()
+      if (old.status === 'unavailable') {
+        return { kind: 'unavailable', error: old.error }
       }
+
+      try {
+        rotateEpoch() // precommit NEXT before the HTTP mutation
+      } catch (error) {
+        return { kind: 'unavailable', error }
+      }
+
+      let response: Response
+      try {
+        response = await httpRequest({
+          path: AUTH_LOGOUT_PATH,
+          method: 'POST',
+          credentials: 'include',
+        })
+      } catch (error) {
+        // AMBIGUOUS after dispatch — the Set-Cookie deletion may already have
+        // been processed. KEEP NEXT; never roll back.
+        return { kind: 'unavailable', error }
+      }
+
+      if (response.status === 204 || response.status === 200) {
+        return { kind: 'success' } // keep NEXT
+      }
+
+      // Logout has NO deliberate non-mutating failure status, so no
+      // post-dispatch outcome is rollback-eligible. KEEP NEXT and fail closed.
       return {
         kind: 'unavailable',
         error: new Error(`Unexpected logout status ${response.status}`),
       }
     })
   } catch (error) {
+    // AuthLockUnavailableError / thrown fetch. Session unchanged.
     return { kind: 'unavailable', error }
   }
 }

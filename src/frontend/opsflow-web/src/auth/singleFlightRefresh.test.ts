@@ -3,18 +3,40 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AUTH_REFRESH_PATH } from './authApi'
 import { AUTH_COOKIE_LOCK_NAME } from './authCookieLock'
 import type { LoginResponse } from './contracts'
+import { SESSION_EPOCH_STORAGE_KEY, _resetSessionEpochForTests } from './sessionEpoch'
 import {
   _resetSessionStoreForTests,
   currentGeneration,
   getAccessToken,
+  getBoundEpoch,
+  getPrincipal,
   invalidateSession,
-  setAccessToken,
+  type Principal,
+  setSession,
 } from './sessionStore'
 import { _resetSingleFlightForTests, refreshOnce } from './singleFlightRefresh'
 
 // ────────────────────────────────────────────────────────────────────────
 // Test helpers
 // ────────────────────────────────────────────────────────────────────────
+
+const EPOCH_A = 'epoch-A'
+const EPOCH_B = 'epoch-B'
+
+// Principal that matches the user embedded in `sampleLogin`.
+const PRINCIPAL_A: Principal = {
+  userId: '11111111-1111-1111-1111-111111111111',
+  organizationId: '22222222-2222-2222-2222-222222222222',
+}
+const PRINCIPAL_B: Principal = {
+  userId: '99999999-9999-9999-9999-999999999999',
+  organizationId: '88888888-8888-8888-8888-888888888888',
+}
+const PRINCIPAL_C: Principal = {
+  userId: '33333333-3333-3333-3333-333333333333',
+  organizationId: '77777777-7777-7777-7777-777777777777',
+}
+const EPOCH_C = 'epoch-C'
 
 interface Deferred<T> {
   promise: Promise<T>
@@ -39,19 +61,23 @@ function jsonBody(body: unknown, status = 200): Response {
   })
 }
 
-function sampleLogin(token: string): LoginResponse {
+function sampleLoginFor(token: string, p: Principal): LoginResponse {
   return {
     accessToken: token,
     accessTokenExpiresAt: '2030-01-01T00:00:00.000+00:00',
     user: {
-      userId: '11111111-1111-1111-1111-111111111111',
+      userId: p.userId,
       email: 'user@test.local',
       displayName: 'Test User',
-      organizationId: '22222222-2222-2222-2222-222222222222',
+      organizationId: p.organizationId,
       organizationName: 'Test Org',
       roles: ['Coordinator'],
     },
   }
+}
+
+function sampleLogin(token: string): LoginResponse {
+  return sampleLoginFor(token, PRINCIPAL_A)
 }
 
 interface FetchHarness {
@@ -89,16 +115,12 @@ interface FakeLockManager {
 interface FakeLockHarness {
   manager: FakeLockManager
   requestCalls: Array<{ name: string }>
-  // When set, `request()` awaits this before invoking the callback — used to
-  // simulate another tab currently holding the lock.
   acquireGate?: Deferred<void>
-  // When set, `request()` throws with this error before invoking any callback.
   throwOnAcquire?: unknown
 }
 
 function makeFakeLockManager(): FakeLockHarness {
   const harness: FakeLockHarness = {
-    // Assigned below to close over `harness`.
     manager: undefined as unknown as FakeLockManager,
     requestCalls: [],
   }
@@ -119,23 +141,16 @@ function makeFakeLockManager(): FakeLockHarness {
 }
 
 function installFakeLocks(manager: FakeLockManager): void {
-  Object.defineProperty(navigator, 'locks', {
-    configurable: true,
-    value: manager,
-  })
+  Object.defineProperty(navigator, 'locks', { configurable: true, value: manager })
 }
 
 function uninstallLocks(): void {
-  Object.defineProperty(navigator, 'locks', {
-    configurable: true,
-    value: undefined,
-  })
+  Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined })
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// Suite lifecycle: default = a passthrough fake LockManager is installed so
-// existing tests exercise the "Web Locks available" happy path. Tests that
-// need the unavailable / throwing path uninstall or replace it explicitly.
+// Suite lifecycle: default = passthrough fake LockManager + an established
+// shared epoch (EPOCH_A) in real jsdom localStorage.
 // ────────────────────────────────────────────────────────────────────────
 
 let defaultLockHarness: FakeLockHarness | null = null
@@ -143,13 +158,18 @@ let defaultLockHarness: FakeLockHarness | null = null
 beforeEach(() => {
   _resetSessionStoreForTests()
   _resetSingleFlightForTests()
+  _resetSessionEpochForTests()
+  localStorage.clear()
+  localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, EPOCH_A)
   defaultLockHarness = makeFakeLockManager()
   installFakeLocks(defaultLockHarness.manager)
 })
 
 afterEach(() => {
+  vi.restoreAllMocks()
   vi.unstubAllGlobals()
   uninstallLocks()
+  localStorage.clear()
   defaultLockHarness = null
 })
 
@@ -163,11 +183,10 @@ describe('singleFlightRefresh — in-tab single-flight', () => {
     const gate = defer<Response>()
     harness.queue.push(() => gate.promise)
 
-    const p1 = refreshOnce()
-    const p2 = refreshOnce()
-    const p3 = refreshOnce()
+    const p1 = refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const p2 = refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const p3 = refreshOnce(EPOCH_A, PRINCIPAL_A)
 
-    // All three must share the same underlying promise instance.
     expect(p1).toBe(p2)
     expect(p2).toBe(p3)
 
@@ -180,9 +199,11 @@ describe('singleFlightRefresh — in-tab single-flight', () => {
     expect(r2).toEqual(r1)
     expect(r3).toEqual(r1)
     expect(getAccessToken()).toBe('t-1')
-    // Exactly one lock acquisition regardless of concurrent callers, and
-    // it uses the SHARED constant — proving refresh serialises through the
-    // same mutex as login and logout.
+    expect(getPrincipal()).toEqual(PRINCIPAL_A)
+    // Test D: a normal refresh installs the new token bound to the SAME epoch.
+    expect(getBoundEpoch()).toBe(EPOCH_A)
+    // Exactly one lock acquisition, using the SHARED constant — proving
+    // refresh serialises through the same mutex as login and logout.
     expect(defaultLockHarness!.requestCalls).toHaveLength(1)
     expect(defaultLockHarness!.requestCalls[0]).toEqual({ name: AUTH_COOKIE_LOCK_NAME })
   })
@@ -192,8 +213,8 @@ describe('singleFlightRefresh — in-tab single-flight', () => {
     harness.queue.push(() => Promise.resolve(jsonBody(sampleLogin('t-a'), 200)))
     harness.queue.push(() => Promise.resolve(jsonBody(sampleLogin('t-b'), 200)))
 
-    await refreshOnce()
-    await refreshOnce()
+    await refreshOnce(EPOCH_A, PRINCIPAL_A)
+    await refreshOnce(EPOCH_A, PRINCIPAL_A)
 
     expect(harness.calls).toHaveLength(2)
     expect(getAccessToken()).toBe('t-b')
@@ -204,30 +225,28 @@ describe('singleFlightRefresh — in-tab single-flight', () => {
     harness.queue.push(() => Promise.resolve(new Response(null, { status: 401 })))
     harness.queue.push(() => Promise.resolve(jsonBody(sampleLogin('t-recovered'), 200)))
 
-    const first = await refreshOnce()
+    const first = await refreshOnce(EPOCH_A, PRINCIPAL_A)
     expect(first.kind).toBe('unauthenticated')
 
-    const second = await refreshOnce()
+    const second = await refreshOnce(EPOCH_A, PRINCIPAL_A)
     expect(second.kind).toBe('refreshed')
 
     expect(harness.calls).toHaveLength(2)
     expect(getAccessToken()).toBe('t-recovered')
   })
 
-  it('never restores the token when the session was invalidated while the refresh was in flight', async () => {
+  it('never restores the token when the session was invalidated (LOCAL) while the refresh was in flight', async () => {
     const harness = stubFetch()
     const gate = defer<Response>()
     harness.queue.push(() => gate.promise)
 
-    // Give the store an initial token so we can prove it was NOT overwritten.
-    setAccessToken('pre-existing', currentGeneration())
+    setSession('pre-existing', PRINCIPAL_A, EPOCH_A, currentGeneration())
 
-    const inFlight = refreshOnce()
+    const inFlight = refreshOnce(EPOCH_A, PRINCIPAL_A)
 
-    // Simulate logout / terminal auth failure while refresh is on the wire.
+    // Local logout while the refresh is on the wire.
     invalidateSession()
 
-    // Refresh returns a fresh token AFTER invalidation.
     gate.resolve(jsonBody(sampleLogin('stale-token'), 200))
     const result = await inFlight
 
@@ -240,105 +259,196 @@ describe('singleFlightRefresh — in-tab single-flight', () => {
     harness.queue.push(() => Promise.reject(new TypeError('offline')))
     harness.queue.push(() => Promise.resolve(jsonBody(sampleLogin('t-2'), 200)))
 
-    const first = await refreshOnce()
+    const first = await refreshOnce(EPOCH_A, PRINCIPAL_A)
     expect(first.kind).toBe('unavailable')
 
-    const second = await refreshOnce()
+    const second = await refreshOnce(EPOCH_A, PRINCIPAL_A)
     expect(second.kind).toBe('refreshed')
     expect(getAccessToken()).toBe('t-2')
+  })
+
+  it('cold bootstrap: refreshOnce(null, null) establishes the epoch and installs the session', async () => {
+    localStorage.clear() // no epoch yet
+    const harness = stubFetch()
+    harness.queue.push(() => Promise.resolve(jsonBody(sampleLogin('t-boot'), 200)))
+
+    const result = await refreshOnce(null, null)
+
+    expect(result.kind).toBe('refreshed')
+    expect(getAccessToken()).toBe('t-boot')
+    // Test E: cold bootstrap installs token + principal + established epoch
+    // atomically — the token's bound epoch equals the newly established
+    // shared epoch.
+    const established = localStorage.getItem(SESSION_EPOCH_STORAGE_KEY)
+    expect(established).not.toBeNull()
+    expect(getBoundEpoch()).toBe(established)
+    expect(getPrincipal()).toEqual(PRINCIPAL_A)
   })
 })
 
 // ────────────────────────────────────────────────────────────────────────
-// Cross-tab Web Locks coordination
+// Cross-tab Web Locks coordination (ordering)
 // ────────────────────────────────────────────────────────────────────────
 
 describe('singleFlightRefresh — cross-tab Web Locks coordination', () => {
   it('acquires the fixed exclusive lock name before POST /refresh, and the network refresh happens INSIDE the lock callback', async () => {
     const harness = stubFetch()
-    // Refresh returns immediately once fetch is invoked — no gate needed on
-    // the response because ordering is proved deterministically by "no
-    // fetch before the lock releases; fetch has occurred after refreshOnce
-    // resolves".
     harness.queue.push(() => Promise.resolve(jsonBody(sampleLogin('t-new'), 200)))
 
-    // Replace the default with a gated lock so we can observe strict ordering.
     uninstallLocks()
     const gatedLock = makeFakeLockManager()
     gatedLock.acquireGate = defer<void>()
     installFakeLocks(gatedLock.manager)
 
-    const promise = refreshOnce()
+    const promise = refreshOnce(EPOCH_A, PRINCIPAL_A)
 
-    // The lock is requested immediately with the fixed name; the request is
-    // now suspended waiting for acquireGate. Because the lock's callback has
-    // not yet been invoked, /refresh has NOT been called.
     expect(gatedLock.requestCalls).toEqual([{ name: AUTH_COOKIE_LOCK_NAME }])
     expect(harness.calls).toHaveLength(0)
 
-    // Release the lock and await the whole refresh cycle. Awaiting the
-    // returned promise is a deterministic synchronization point: the
-    // promise cannot resolve without the callback having run to completion,
-    // which is the only path that can invoke fetch.
     gatedLock.acquireGate.resolve()
     const result = await promise
 
-    // Ordering proof: fetch count was 0 before releasing the lock and is
-    // now exactly 1 for /refresh. The only code path that could have
-    // called fetch in that window is the lock's callback.
     expect(harness.calls).toEqual([AUTH_REFRESH_PATH])
     expect(result.kind).toBe('refreshed')
     expect(getAccessToken()).toBe('t-new')
   })
 
-  it('returns stale WITHOUT calling POST /refresh when the session is invalidated while WAITING for the cross-tab lock', async () => {
+  it('returns stale WITHOUT calling POST /refresh when the LOCAL session is invalidated while WAITING for the lock', async () => {
     const harness = stubFetch()
-    // No fetch responses queued — we assert zero fetches occur.
 
     uninstallLocks()
     const gatedLock = makeFakeLockManager()
     gatedLock.acquireGate = defer<void>()
     installFakeLocks(gatedLock.manager)
 
-    setAccessToken('pre-existing', currentGeneration())
+    setSession('pre-existing', PRINCIPAL_A, EPOCH_A, currentGeneration())
 
-    const promise = refreshOnce()
-
-    // The lock request has been issued but is waiting on the gate.
+    const promise = refreshOnce(EPOCH_A, PRINCIPAL_A)
     expect(gatedLock.requestCalls).toHaveLength(1)
 
-    // Simulate a LOCAL logout in this tab while it is still waiting for
-    // the cross-tab lock (which a sibling tab is holding). Only the local
-    // logout bumps THIS tab's generation; the sibling's refresh does not.
+    // LOCAL logout while waiting for the lock — bumps this tab's generation.
     invalidateSession()
 
-    // Release the lock — the callback runs, re-checks generation, and
-    // returns stale WITHOUT calling authRefresh.
     gatedLock.acquireGate.resolve()
     const result = await promise
 
     expect(result.kind).toBe('stale')
-    expect(harness.calls).toHaveLength(0) // zero POST /refresh
+    expect(harness.calls).toHaveLength(0)
     expect(getAccessToken()).toBeNull()
   })
 })
 
 // ────────────────────────────────────────────────────────────────────────
-// Fail-closed availability policy
+// Cross-tab session replacement (epoch guard) — the P1
 // ────────────────────────────────────────────────────────────────────────
 
-describe('singleFlightRefresh — fail-closed when Web Locks is unavailable', () => {
+describe('singleFlightRefresh — cross-tab session-replacement (epoch) guard', () => {
+  it('returns session-replaced with ZERO POST when a sibling rotates the epoch while WAITING for the lock', async () => {
+    const harness = stubFetch()
+    // No fetch responses queued — we assert zero POST /refresh.
+
+    uninstallLocks()
+    const gatedLock = makeFakeLockManager()
+    gatedLock.acquireGate = defer<void>()
+    installFakeLocks(gatedLock.manager)
+
+    setSession('token-A', PRINCIPAL_A, EPOCH_A, currentGeneration())
+
+    // Request captured epoch A and is now queued behind the lock.
+    const promise = refreshOnce(EPOCH_A, PRINCIPAL_A)
+    expect(gatedLock.requestCalls).toHaveLength(1)
+
+    // Sibling tab logs in as B and rotates the shared epoch while we wait.
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, EPOCH_B)
+
+    // We finally acquire the lock — the post-lock epoch re-check fires.
+    gatedLock.acquireGate.resolve()
+    const result = await promise
+
+    expect(result.kind).toBe('session-replaced')
+    expect(harness.calls).toHaveLength(0) // NO POST /refresh
+    // The old token/principal are untouched (no B token installed here).
+    expect(getAccessToken()).toBe('token-A')
+    expect(getPrincipal()).toEqual(PRINCIPAL_A)
+  })
+
+  it('returns session-replaced with ZERO POST when the epoch already differs before the POST', async () => {
+    const harness = stubFetch()
+    setSession('token-A', PRINCIPAL_A, EPOCH_A, currentGeneration())
+
+    // Sibling already replaced the session before we even queue.
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, EPOCH_B)
+
+    const result = await refreshOnce(EPOCH_A, PRINCIPAL_A)
+
+    expect(result.kind).toBe('session-replaced')
+    expect(harness.calls).toHaveLength(0)
+    expect(getAccessToken()).toBe('token-A')
+  })
+
+  it('does NOT install a foreign token/principal: principal mismatch → session-replaced BEFORE setSession (epoch unchanged)', async () => {
+    const PRINCIPAL_B: Principal = {
+      userId: '99999999-9999-9999-9999-999999999999',
+      organizationId: '88888888-8888-8888-8888-888888888888',
+    }
+    const harness = stubFetch()
+    setSession('token-A', PRINCIPAL_A, EPOCH_A, currentGeneration())
+
+    // Epoch stays A the whole time. The refresh response, however, belongs to
+    // account B (synthetic — a real account switch would rotate the epoch).
+    harness.queue.push(() => Promise.resolve(jsonBody({
+      accessToken: 'token-B',
+      accessTokenExpiresAt: '2030-01-01T00:00:00.000+00:00',
+      user: {
+        userId: PRINCIPAL_B.userId,
+        email: 'other@test.local',
+        displayName: 'Other',
+        organizationId: PRINCIPAL_B.organizationId,
+        organizationName: 'Other Org',
+        roles: ['Viewer'],
+      },
+    }, 200)))
+
+    // Expected principal is A.
+    const result = await refreshOnce(EPOCH_A, PRINCIPAL_A)
+
+    expect(result.kind).toBe('session-replaced')
+    // POST /refresh DID happen (epoch matched), but the mismatched token was
+    // rejected BEFORE installation — token B / principal B are NOT in the store.
+    expect(harness.calls).toHaveLength(1)
+    expect(getAccessToken()).toBe('token-A')
+    expect(getPrincipal()).toEqual(PRINCIPAL_A)
+  })
+
+  it('cold bootstrap (expectedPrincipal = null) installs whatever principal the refresh returns', async () => {
+    localStorage.clear() // no epoch yet
+    _resetSessionStoreForTests()
+    const harness = stubFetch()
+    harness.queue.push(() => Promise.resolve(jsonBody(sampleLogin('t-boot'), 200)))
+
+    const result = await refreshOnce(null, null)
+
+    expect(result.kind).toBe('refreshed')
+    expect(getAccessToken()).toBe('t-boot')
+    expect(getPrincipal()).toEqual(PRINCIPAL_A)
+  })
+})
+
+// ────────────────────────────────────────────────────────────────────────
+// Fail-closed availability policy (Web Locks + epoch storage)
+// ────────────────────────────────────────────────────────────────────────
+
+describe('singleFlightRefresh — fail-closed availability', () => {
   it('returns unavailable and issues ZERO POST /refresh when navigator.locks is missing', async () => {
     uninstallLocks()
     const harness = stubFetch()
-    setAccessToken('pre-existing', currentGeneration())
+    setSession('pre-existing', PRINCIPAL_A, EPOCH_A, currentGeneration())
     const initialGeneration = currentGeneration()
 
-    const result = await refreshOnce()
+    const result = await refreshOnce(EPOCH_A, PRINCIPAL_A)
 
     expect(result.kind).toBe('unavailable')
     expect(harness.calls).toHaveLength(0)
-    // Session state untouched — no token clear, no generation bump.
     expect(getAccessToken()).toBe('pre-existing')
     expect(currentGeneration()).toBe(initialGeneration)
   })
@@ -350,10 +460,9 @@ describe('singleFlightRefresh — fail-closed when Web Locks is unavailable', ()
     installFakeLocks(throwingLock.manager)
 
     const harness = stubFetch()
-    setAccessToken('pre-existing', currentGeneration())
-    const initialGeneration = currentGeneration()
+    setSession('pre-existing', PRINCIPAL_A, EPOCH_A, currentGeneration())
 
-    const result = await refreshOnce()
+    const result = await refreshOnce(EPOCH_A, PRINCIPAL_A)
 
     expect(result.kind).toBe('unavailable')
     if (result.kind === 'unavailable') {
@@ -361,24 +470,238 @@ describe('singleFlightRefresh — fail-closed when Web Locks is unavailable', ()
     }
     expect(harness.calls).toHaveLength(0)
     expect(getAccessToken()).toBe('pre-existing')
-    expect(currentGeneration()).toBe(initialGeneration)
+  })
+
+  it('returns unavailable and issues ZERO POST /refresh when the shared epoch cannot be READ', async () => {
+    const harness = stubFetch()
+    setSession('pre-existing', PRINCIPAL_A, EPOCH_A, currentGeneration())
+
+    // Break epoch READ: the post-lock epoch check cannot evaluate the
+    // cross-tab invariant, so refresh fails closed (never a false 'present').
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('denied')
+    })
+
+    const result = await refreshOnce(EPOCH_A, PRINCIPAL_A)
+
+    expect(result.kind).toBe('unavailable')
+    expect(harness.calls).toHaveLength(0)
+    expect(getAccessToken()).toBe('pre-existing')
   })
 
   it('clears the pending slot after an unavailable outcome so a later call can retry when the runtime recovers', async () => {
     uninstallLocks()
     const harness = stubFetch()
 
-    const first = await refreshOnce()
+    const first = await refreshOnce(EPOCH_A, PRINCIPAL_A)
     expect(first.kind).toBe('unavailable')
 
-    // Restore Web Locks — a later refresh cycle must be able to run.
     const recovered = makeFakeLockManager()
     installFakeLocks(recovered.manager)
     harness.queue.push(() => Promise.resolve(jsonBody(sampleLogin('t-recovered'), 200)))
 
-    const second = await refreshOnce()
+    const second = await refreshOnce(EPOCH_A, PRINCIPAL_A)
     expect(second.kind).toBe('refreshed')
     expect(getAccessToken()).toBe('t-recovered')
     expect(recovered.requestCalls).toHaveLength(1)
+  })
+})
+
+// ────────────────────────────────────────────────────────────────────────
+// Parameter-aware single-flight (identity-keyed pending)
+// ────────────────────────────────────────────────────────────────────────
+
+describe('singleFlightRefresh — parameter-aware single-flight', () => {
+  // Test A: same epoch + same principal → same promise / one POST.
+  it('shares one Promise and one POST for the SAME logical session', async () => {
+    const harness = stubFetch()
+    const gate = defer<Response>()
+    harness.queue.push(() => gate.promise)
+
+    const p1 = refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const p2 = refreshOnce(EPOCH_A, PRINCIPAL_A)
+    expect(p1).toBe(p2)
+
+    gate.resolve(jsonBody(sampleLogin('t-1'), 200))
+    await Promise.all([p1, p2])
+    expect(harness.calls).toHaveLength(1)
+  })
+
+  // Test B: a different epoch while an old refresh is pending must NOT consume
+  // the old result; after the old settles, the new session runs its own.
+  it('does NOT consume the old pending result for a different epoch; runs its own after the old settles', async () => {
+    const harness = stubFetch()
+    const gate1 = defer<Response>()
+    harness.queue.push(() => gate1.promise) // old refresh (E1 / A)
+    harness.queue.push(() => Promise.resolve(jsonBody(sampleLoginFor('t-b', PRINCIPAL_B), 200))) // new (E2 / B)
+
+    // Old caller for session (EPOCH_A, A); it is now gated inside authRefresh.
+    const p1 = refreshOnce(EPOCH_A, PRINCIPAL_A)
+
+    // A NEW local session (EPOCH_B, B). Rotate the shared epoch to match it.
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, EPOCH_B)
+    const p2 = refreshOnce(EPOCH_B, PRINCIPAL_B)
+    expect(p2).not.toBe(p1)
+
+    // Release the old refresh. Its post-response epoch check now sees EPOCH_B
+    // (≠ its expected EPOCH_A) → session-replaced; it installs nothing.
+    gate1.resolve(jsonBody(sampleLogin('t-a'), 200))
+    const r1 = await p1
+    const r2 = await p2
+
+    expect(r1.kind).toBe('session-replaced')
+    expect(r2.kind).toBe('refreshed')
+    // Two distinct POSTs — the second did NOT reuse the first.
+    expect(harness.calls).toHaveLength(2)
+    expect(getAccessToken()).toBe('t-b')
+    expect(getBoundEpoch()).toBe(EPOCH_B)
+  })
+
+  // Test C: same epoch but different principal → not shared.
+  it('does NOT share the pending refresh for the SAME epoch but a DIFFERENT principal', async () => {
+    const harness = stubFetch()
+    const gate = defer<Response>()
+    harness.queue.push(() => gate.promise) // old (A)
+    harness.queue.push(() => Promise.resolve(jsonBody(sampleLogin('t-a2'), 200))) // new caller's own cycle
+
+    const p1 = refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const p2 = refreshOnce(EPOCH_A, PRINCIPAL_B) // same epoch, different principal
+    expect(p2).not.toBe(p1)
+
+    gate.resolve(jsonBody(sampleLogin('t-a'), 200))
+    await p1
+    const r2 = await p2
+
+    // p2 ran its OWN cycle; the refresh returned principal A ≠ expected B →
+    // session-replaced (it did not adopt p1's refreshed token).
+    expect(r2.kind).toBe('session-replaced')
+    expect(harness.calls).toHaveLength(2)
+  })
+
+  // Test D: after an old pending returns session-replaced, a newer valid
+  // caller can start its own refresh.
+  it('lets a newer valid caller start its own refresh after the old one returned session-replaced', async () => {
+    const harness = stubFetch()
+    // Shared epoch is already EPOCH_B, so an (EPOCH_A, A) refresh is replaced
+    // immediately with zero POST.
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, EPOCH_B)
+    harness.queue.push(() => Promise.resolve(jsonBody(sampleLoginFor('t-b', PRINCIPAL_B), 200)))
+
+    const r1 = await refreshOnce(EPOCH_A, PRINCIPAL_A)
+    expect(r1.kind).toBe('session-replaced')
+
+    const r2 = await refreshOnce(EPOCH_B, PRINCIPAL_B)
+    expect(r2.kind).toBe('refreshed')
+    expect(getAccessToken()).toBe('t-b')
+  })
+
+  // Multi-waiter proof #1: two IDENTICAL mismatched waiters behind an old
+  // pending must SHARE the next cycle — only one E2/B POST, and never two
+  // refresh POSTs concurrently.
+  it('two identical mismatched waiters behind an old pending share ONE next cycle (one E2/B POST)', async () => {
+    const harness = stubFetch()
+    const gateA = defer<Response>()
+    // Only TWO responses are queued: A's, and ONE shared E2/B cycle. If C
+    // wrongly started its own cycle, a third fetch would throw "no queued
+    // response" — so this also proves there is no duplicate POST.
+    harness.queue.push(() => gateA.promise)
+    harness.queue.push(() => Promise.resolve(jsonBody(sampleLoginFor('t-b', PRINCIPAL_B), 200)))
+
+    // A is pending (E1 = EPOCH_A / principalA); it is now inside authRefresh.
+    const pA = refreshOnce(EPOCH_A, PRINCIPAL_A)
+
+    // A new local session (E2 = EPOCH_B / principalB). Two waiters want it.
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, EPOCH_B)
+    const pB = refreshOnce(EPOCH_B, PRINCIPAL_B)
+    const pC = refreshOnce(EPOCH_B, PRINCIPAL_B)
+    // C observed B's synchronously-installed pending entry → shares B's promise.
+    expect(pC).toBe(pB)
+
+    // Release A: its post-response epoch check sees EPOCH_B ≠ EPOCH_A →
+    // session-replaced. Then the single E2/B cycle runs for BOTH B and C.
+    gateA.resolve(jsonBody(sampleLogin('t-a'), 200))
+    const [rA, rB, rC] = await Promise.all([pA, pB, pC])
+
+    expect(rA.kind).toBe('session-replaced')
+    expect(rB.kind).toBe('refreshed')
+    expect(rC).toEqual(rB)
+    // Exactly two POSTs total: A's, and ONE shared E2/B.
+    expect(harness.calls).toHaveLength(2)
+    expect(getAccessToken()).toBe('t-b')
+    expect(getBoundEpoch()).toBe(EPOCH_B)
+  })
+
+  // Multi-waiter proof #2: three DIFFERENT mismatched waiters serialize; there
+  // is NEVER more than one refresh POST in flight at a time.
+  it('three DIFFERENT mismatched waiters serialize — max ONE concurrent refresh POST', async () => {
+    let inFlight = 0
+    let maxInFlight = 0
+
+    interface Gated {
+      started: Promise<void>
+      resolve: (r: Response) => void
+      handler: () => Promise<Response>
+    }
+    function gated(): Gated {
+      const started = defer<void>()
+      const gate = defer<Response>()
+      return {
+        started: started.promise,
+        resolve: (r) => gate.resolve(r),
+        handler: async () => {
+          inFlight += 1
+          maxInFlight = Math.max(maxInFlight, inFlight)
+          started.resolve()
+          try {
+            return await gate.promise
+          } finally {
+            inFlight -= 1
+          }
+        },
+      }
+    }
+
+    const harness = stubFetch()
+    const a = gated()
+    const b = gated()
+    const c = gated()
+    harness.queue.push(a.handler)
+    harness.queue.push(b.handler)
+    harness.queue.push(c.handler)
+
+    // A runs first under shared epoch EPOCH_A.
+    const pA = refreshOnce(EPOCH_A, PRINCIPAL_A)
+    await a.started
+    expect(maxInFlight).toBe(1)
+
+    // Queue two different-identity waiters; each chains off the LATEST pending
+    // (B off A, C off B) — a strictly serial chain.
+    const pB = refreshOnce(EPOCH_B, PRINCIPAL_B)
+    const pC = refreshOnce(EPOCH_C, PRINCIPAL_C)
+
+    // Move shared → E2 and release A; A is replaced, then B runs under E2.
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, EPOCH_B)
+    a.resolve(jsonBody(sampleLogin('t-a'), 200))
+    await b.started
+    expect(maxInFlight).toBe(1) // A's POST finished before B's began
+
+    // Move shared → E3 and release B; B is replaced, then C runs under E3.
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, EPOCH_C)
+    b.resolve(jsonBody(sampleLoginFor('t-b', PRINCIPAL_B), 200))
+    await c.started
+    expect(maxInFlight).toBe(1)
+
+    // Release C; C matches epoch E3 + principal C → refreshed.
+    c.resolve(jsonBody(sampleLoginFor('t-c', PRINCIPAL_C), 200))
+    const [rA, rB, rC] = await Promise.all([pA, pB, pC])
+
+    expect(rA.kind).toBe('session-replaced')
+    expect(rB.kind).toBe('session-replaced')
+    expect(rC.kind).toBe('refreshed')
+    expect(getAccessToken()).toBe('t-c')
+    expect(getBoundEpoch()).toBe(EPOCH_C)
+    // Three POSTs total, but never two at once.
+    expect(harness.calls).toHaveLength(3)
+    expect(maxInFlight).toBe(1)
   })
 })
