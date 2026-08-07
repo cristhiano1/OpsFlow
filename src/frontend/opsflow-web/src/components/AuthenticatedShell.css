@@ -1,0 +1,64 @@
+.shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.shell-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.5rem;
+  border-bottom: 1px solid var(--border);
+  background-color: var(--surface);
+  gap: 1rem;
+}
+
+.shell-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.shell-org {
+  margin: 0.125rem 0 0;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.shell-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.shell-user {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.shell-logout-button {
+  padding: 0.375rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  background-color: var(--bg);
+  color: var(--text);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.shell-logout-button:hover {
+  background-color: var(--surface);
+}
+
+.shell-main {
+  flex: 1;
+  padding: 2rem 1.5rem;
+}
+
+.shell-message {
+  margin: 0;
+  max-width: 40rem;
+  color: var(--text-muted);
+}
