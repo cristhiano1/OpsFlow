@@ -3,7 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AUTH_REFRESH_PATH } from './authApi'
 import { AUTH_COOKIE_LOCK_NAME } from './authCookieLock'
 import type { LoginResponse } from './contracts'
-import { SESSION_EPOCH_STORAGE_KEY, _resetSessionEpochForTests } from './sessionEpoch'
+import {
+  type ExpectedEpoch,
+  SESSION_EPOCH_STORAGE_KEY,
+  _resetSessionEpochForTests,
+} from './sessionEpoch'
 import {
   _resetSessionStoreForTests,
   currentGeneration,
@@ -37,6 +41,9 @@ const PRINCIPAL_C: Principal = {
   organizationId: '77777777-7777-7777-7777-777777777777',
 }
 const EPOCH_C = 'epoch-C'
+
+const present = (epoch: string): ExpectedEpoch => ({ kind: 'present', epoch })
+const MISSING: ExpectedEpoch = { kind: 'missing' }
 
 interface Deferred<T> {
   promise: Promise<T>
@@ -183,9 +190,9 @@ describe('singleFlightRefresh — in-tab single-flight', () => {
     const gate = defer<Response>()
     harness.queue.push(() => gate.promise)
 
-    const p1 = refreshOnce(EPOCH_A, PRINCIPAL_A)
-    const p2 = refreshOnce(EPOCH_A, PRINCIPAL_A)
-    const p3 = refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const p1 = refreshOnce(present(EPOCH_A), PRINCIPAL_A)
+    const p2 = refreshOnce(present(EPOCH_A), PRINCIPAL_A)
+    const p3 = refreshOnce(present(EPOCH_A), PRINCIPAL_A)
 
     expect(p1).toBe(p2)
     expect(p2).toBe(p3)
@@ -213,8 +220,8 @@ describe('singleFlightRefresh — in-tab single-flight', () => {
     harness.queue.push(() => Promise.resolve(jsonBody(sampleLogin('t-a'), 200)))
     harness.queue.push(() => Promise.resolve(jsonBody(sampleLogin('t-b'), 200)))
 
-    await refreshOnce(EPOCH_A, PRINCIPAL_A)
-    await refreshOnce(EPOCH_A, PRINCIPAL_A)
+    await refreshOnce(present(EPOCH_A), PRINCIPAL_A)
+    await refreshOnce(present(EPOCH_A), PRINCIPAL_A)
 
     expect(harness.calls).toHaveLength(2)
     expect(getAccessToken()).toBe('t-b')
@@ -225,10 +232,10 @@ describe('singleFlightRefresh — in-tab single-flight', () => {
     harness.queue.push(() => Promise.resolve(new Response(null, { status: 401 })))
     harness.queue.push(() => Promise.resolve(jsonBody(sampleLogin('t-recovered'), 200)))
 
-    const first = await refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const first = await refreshOnce(present(EPOCH_A), PRINCIPAL_A)
     expect(first.kind).toBe('unauthenticated')
 
-    const second = await refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const second = await refreshOnce(present(EPOCH_A), PRINCIPAL_A)
     expect(second.kind).toBe('refreshed')
 
     expect(harness.calls).toHaveLength(2)
@@ -242,7 +249,7 @@ describe('singleFlightRefresh — in-tab single-flight', () => {
 
     setSession('pre-existing', PRINCIPAL_A, EPOCH_A, currentGeneration())
 
-    const inFlight = refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const inFlight = refreshOnce(present(EPOCH_A), PRINCIPAL_A)
 
     // Local logout while the refresh is on the wire.
     invalidateSession()
@@ -259,20 +266,20 @@ describe('singleFlightRefresh — in-tab single-flight', () => {
     harness.queue.push(() => Promise.reject(new TypeError('offline')))
     harness.queue.push(() => Promise.resolve(jsonBody(sampleLogin('t-2'), 200)))
 
-    const first = await refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const first = await refreshOnce(present(EPOCH_A), PRINCIPAL_A)
     expect(first.kind).toBe('unavailable')
 
-    const second = await refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const second = await refreshOnce(present(EPOCH_A), PRINCIPAL_A)
     expect(second.kind).toBe('refreshed')
     expect(getAccessToken()).toBe('t-2')
   })
 
-  it('cold bootstrap: refreshOnce(null, null) establishes the epoch and installs the session', async () => {
+  it('cold bootstrap: refreshOnce(MISSING, null) establishes the epoch and installs the session', async () => {
     localStorage.clear() // no epoch yet
     const harness = stubFetch()
     harness.queue.push(() => Promise.resolve(jsonBody(sampleLogin('t-boot'), 200)))
 
-    const result = await refreshOnce(null, null)
+    const result = await refreshOnce(MISSING, null)
 
     expect(result.kind).toBe('refreshed')
     expect(getAccessToken()).toBe('t-boot')
@@ -300,7 +307,7 @@ describe('singleFlightRefresh — cross-tab Web Locks coordination', () => {
     gatedLock.acquireGate = defer<void>()
     installFakeLocks(gatedLock.manager)
 
-    const promise = refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const promise = refreshOnce(present(EPOCH_A), PRINCIPAL_A)
 
     expect(gatedLock.requestCalls).toEqual([{ name: AUTH_COOKIE_LOCK_NAME }])
     expect(harness.calls).toHaveLength(0)
@@ -323,7 +330,7 @@ describe('singleFlightRefresh — cross-tab Web Locks coordination', () => {
 
     setSession('pre-existing', PRINCIPAL_A, EPOCH_A, currentGeneration())
 
-    const promise = refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const promise = refreshOnce(present(EPOCH_A), PRINCIPAL_A)
     expect(gatedLock.requestCalls).toHaveLength(1)
 
     // LOCAL logout while waiting for the lock — bumps this tab's generation.
@@ -355,7 +362,7 @@ describe('singleFlightRefresh — cross-tab session-replacement (epoch) guard', 
     setSession('token-A', PRINCIPAL_A, EPOCH_A, currentGeneration())
 
     // Request captured epoch A and is now queued behind the lock.
-    const promise = refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const promise = refreshOnce(present(EPOCH_A), PRINCIPAL_A)
     expect(gatedLock.requestCalls).toHaveLength(1)
 
     // Sibling tab logs in as B and rotates the shared epoch while we wait.
@@ -379,7 +386,7 @@ describe('singleFlightRefresh — cross-tab session-replacement (epoch) guard', 
     // Sibling already replaced the session before we even queue.
     localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, EPOCH_B)
 
-    const result = await refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const result = await refreshOnce(present(EPOCH_A), PRINCIPAL_A)
 
     expect(result.kind).toBe('session-replaced')
     expect(harness.calls).toHaveLength(0)
@@ -410,7 +417,7 @@ describe('singleFlightRefresh — cross-tab session-replacement (epoch) guard', 
     }, 200)))
 
     // Expected principal is A.
-    const result = await refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const result = await refreshOnce(present(EPOCH_A), PRINCIPAL_A)
 
     expect(result.kind).toBe('session-replaced')
     // POST /refresh DID happen (epoch matched), but the mismatched token was
@@ -426,11 +433,104 @@ describe('singleFlightRefresh — cross-tab session-replacement (epoch) guard', 
     const harness = stubFetch()
     harness.queue.push(() => Promise.resolve(jsonBody(sampleLogin('t-boot'), 200)))
 
-    const result = await refreshOnce(null, null)
+    const result = await refreshOnce(MISSING, null)
 
     expect(result.kind).toBe('refreshed')
     expect(getAccessToken()).toBe('t-boot')
     expect(getPrincipal()).toEqual(PRINCIPAL_A)
+  })
+})
+
+// ────────────────────────────────────────────────────────────────────────
+// ExpectedEpoch missing→present — the P1 fix. A caller that captured
+// "no epoch" must NEVER adopt an epoch that a sibling created in between.
+// ────────────────────────────────────────────────────────────────────────
+
+describe('singleFlightRefresh — MISSING expectation cannot adopt a sibling-created epoch', () => {
+  // P1 EXACT REPRODUCTION — the sequence described in the review.
+  it('MISSING at capture → sibling creates E_B before we get the lock → session-replaced, ZERO POST', async () => {
+    localStorage.clear() // shared epoch MISSING at capture
+
+    const harness = stubFetch()
+    // NO refresh response queued: a POST would throw. Proves zero POST.
+
+    // Sibling created shared epoch E_B before this refresh acquires the lock.
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, EPOCH_B)
+
+    const result = await refreshOnce(MISSING, null)
+
+    expect(result.kind).toBe('session-replaced')
+    expect(harness.calls).toHaveLength(0)
+    // No B session was ever installed into this tab.
+    expect(getAccessToken()).toBeNull()
+    expect(getPrincipal()).toBeNull()
+    expect(getBoundEpoch()).toBeNull()
+    // The shared epoch itself is left alone (we do not mutate B's session).
+    expect(localStorage.getItem(SESSION_EPOCH_STORAGE_KEY)).toBe(EPOCH_B)
+  })
+
+  // Epoch created WHILE WAITING for the lock — deterministic via a gated lock.
+  it('MISSING at capture → epoch appears WHILE WAITING for the lock → session-replaced, ZERO POST', async () => {
+    localStorage.clear()
+    const harness = stubFetch()
+    // No responses queued — must not POST.
+
+    uninstallLocks()
+    const gatedLock = makeFakeLockManager()
+    gatedLock.acquireGate = defer<void>()
+    installFakeLocks(gatedLock.manager)
+
+    const promise = refreshOnce(MISSING, null)
+    // The lock was requested; the callback is suspended on the gate.
+    expect(gatedLock.requestCalls).toHaveLength(1)
+
+    // While we wait, a sibling successfully creates E_B.
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, EPOCH_B)
+
+    gatedLock.acquireGate.resolve()
+    const result = await promise
+
+    expect(result.kind).toBe('session-replaced')
+    expect(harness.calls).toHaveLength(0)
+    expect(getAccessToken()).toBeNull()
+    expect(getBoundEpoch()).toBeNull()
+    expect(localStorage.getItem(SESSION_EPOCH_STORAGE_KEY)).toBe(EPOCH_B)
+  })
+
+  // Legitimate first cold bootstrap: still missing under the lock → establish.
+  it('MISSING at capture → STILL missing under the lock → establishes epoch, one POST, bound to established epoch', async () => {
+    localStorage.clear()
+    const harness = stubFetch()
+    harness.queue.push(() => Promise.resolve(jsonBody(sampleLogin('t-boot'), 200)))
+
+    const result = await refreshOnce(MISSING, null)
+
+    expect(result.kind).toBe('refreshed')
+    expect(harness.calls).toHaveLength(1)
+    const established = localStorage.getItem(SESSION_EPOCH_STORAGE_KEY)
+    expect(established).not.toBeNull()
+    // Atomic install: token + principal + bound epoch (= newly established).
+    expect(getAccessToken()).toBe('t-boot')
+    expect(getPrincipal()).toEqual(PRINCIPAL_A)
+    expect(getBoundEpoch()).toBe(established)
+  })
+
+  // Normal page reload with an already-existing epoch — legitimate present-E.
+  it('PRESENT-E at capture with no local token → refreshes under E and installs bound-to-E', async () => {
+    // Shared epoch already exists (a prior session's marker); no local state.
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, EPOCH_A)
+    const harness = stubFetch()
+    harness.queue.push(() => Promise.resolve(jsonBody(sampleLogin('t-reload'), 200)))
+
+    const result = await refreshOnce(present(EPOCH_A), null)
+
+    expect(result.kind).toBe('refreshed')
+    expect(harness.calls).toHaveLength(1)
+    expect(getAccessToken()).toBe('t-reload')
+    expect(getPrincipal()).toEqual(PRINCIPAL_A)
+    // Bound to the SAME pre-existing epoch — not a rotation.
+    expect(getBoundEpoch()).toBe(EPOCH_A)
+    expect(localStorage.getItem(SESSION_EPOCH_STORAGE_KEY)).toBe(EPOCH_A)
   })
 })
 
@@ -445,7 +545,7 @@ describe('singleFlightRefresh — fail-closed availability', () => {
     setSession('pre-existing', PRINCIPAL_A, EPOCH_A, currentGeneration())
     const initialGeneration = currentGeneration()
 
-    const result = await refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const result = await refreshOnce(present(EPOCH_A), PRINCIPAL_A)
 
     expect(result.kind).toBe('unavailable')
     expect(harness.calls).toHaveLength(0)
@@ -462,7 +562,7 @@ describe('singleFlightRefresh — fail-closed availability', () => {
     const harness = stubFetch()
     setSession('pre-existing', PRINCIPAL_A, EPOCH_A, currentGeneration())
 
-    const result = await refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const result = await refreshOnce(present(EPOCH_A), PRINCIPAL_A)
 
     expect(result.kind).toBe('unavailable')
     if (result.kind === 'unavailable') {
@@ -482,7 +582,7 @@ describe('singleFlightRefresh — fail-closed availability', () => {
       throw new DOMException('denied')
     })
 
-    const result = await refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const result = await refreshOnce(present(EPOCH_A), PRINCIPAL_A)
 
     expect(result.kind).toBe('unavailable')
     expect(harness.calls).toHaveLength(0)
@@ -493,14 +593,14 @@ describe('singleFlightRefresh — fail-closed availability', () => {
     uninstallLocks()
     const harness = stubFetch()
 
-    const first = await refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const first = await refreshOnce(present(EPOCH_A), PRINCIPAL_A)
     expect(first.kind).toBe('unavailable')
 
     const recovered = makeFakeLockManager()
     installFakeLocks(recovered.manager)
     harness.queue.push(() => Promise.resolve(jsonBody(sampleLogin('t-recovered'), 200)))
 
-    const second = await refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const second = await refreshOnce(present(EPOCH_A), PRINCIPAL_A)
     expect(second.kind).toBe('refreshed')
     expect(getAccessToken()).toBe('t-recovered')
     expect(recovered.requestCalls).toHaveLength(1)
@@ -518,8 +618,8 @@ describe('singleFlightRefresh — parameter-aware single-flight', () => {
     const gate = defer<Response>()
     harness.queue.push(() => gate.promise)
 
-    const p1 = refreshOnce(EPOCH_A, PRINCIPAL_A)
-    const p2 = refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const p1 = refreshOnce(present(EPOCH_A), PRINCIPAL_A)
+    const p2 = refreshOnce(present(EPOCH_A), PRINCIPAL_A)
     expect(p1).toBe(p2)
 
     gate.resolve(jsonBody(sampleLogin('t-1'), 200))
@@ -536,11 +636,11 @@ describe('singleFlightRefresh — parameter-aware single-flight', () => {
     harness.queue.push(() => Promise.resolve(jsonBody(sampleLoginFor('t-b', PRINCIPAL_B), 200))) // new (E2 / B)
 
     // Old caller for session (EPOCH_A, A); it is now gated inside authRefresh.
-    const p1 = refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const p1 = refreshOnce(present(EPOCH_A), PRINCIPAL_A)
 
     // A NEW local session (EPOCH_B, B). Rotate the shared epoch to match it.
     localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, EPOCH_B)
-    const p2 = refreshOnce(EPOCH_B, PRINCIPAL_B)
+    const p2 = refreshOnce(present(EPOCH_B), PRINCIPAL_B)
     expect(p2).not.toBe(p1)
 
     // Release the old refresh. Its post-response epoch check now sees EPOCH_B
@@ -564,8 +664,8 @@ describe('singleFlightRefresh — parameter-aware single-flight', () => {
     harness.queue.push(() => gate.promise) // old (A)
     harness.queue.push(() => Promise.resolve(jsonBody(sampleLogin('t-a2'), 200))) // new caller's own cycle
 
-    const p1 = refreshOnce(EPOCH_A, PRINCIPAL_A)
-    const p2 = refreshOnce(EPOCH_A, PRINCIPAL_B) // same epoch, different principal
+    const p1 = refreshOnce(present(EPOCH_A), PRINCIPAL_A)
+    const p2 = refreshOnce(present(EPOCH_A), PRINCIPAL_B) // same epoch, different principal
     expect(p2).not.toBe(p1)
 
     gate.resolve(jsonBody(sampleLogin('t-a'), 200))
@@ -587,10 +687,10 @@ describe('singleFlightRefresh — parameter-aware single-flight', () => {
     localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, EPOCH_B)
     harness.queue.push(() => Promise.resolve(jsonBody(sampleLoginFor('t-b', PRINCIPAL_B), 200)))
 
-    const r1 = await refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const r1 = await refreshOnce(present(EPOCH_A), PRINCIPAL_A)
     expect(r1.kind).toBe('session-replaced')
 
-    const r2 = await refreshOnce(EPOCH_B, PRINCIPAL_B)
+    const r2 = await refreshOnce(present(EPOCH_B), PRINCIPAL_B)
     expect(r2.kind).toBe('refreshed')
     expect(getAccessToken()).toBe('t-b')
   })
@@ -608,12 +708,12 @@ describe('singleFlightRefresh — parameter-aware single-flight', () => {
     harness.queue.push(() => Promise.resolve(jsonBody(sampleLoginFor('t-b', PRINCIPAL_B), 200)))
 
     // A is pending (E1 = EPOCH_A / principalA); it is now inside authRefresh.
-    const pA = refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const pA = refreshOnce(present(EPOCH_A), PRINCIPAL_A)
 
     // A new local session (E2 = EPOCH_B / principalB). Two waiters want it.
     localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, EPOCH_B)
-    const pB = refreshOnce(EPOCH_B, PRINCIPAL_B)
-    const pC = refreshOnce(EPOCH_B, PRINCIPAL_B)
+    const pB = refreshOnce(present(EPOCH_B), PRINCIPAL_B)
+    const pC = refreshOnce(present(EPOCH_B), PRINCIPAL_B)
     // C observed B's synchronously-installed pending entry → shares B's promise.
     expect(pC).toBe(pB)
 
@@ -670,14 +770,14 @@ describe('singleFlightRefresh — parameter-aware single-flight', () => {
     harness.queue.push(c.handler)
 
     // A runs first under shared epoch EPOCH_A.
-    const pA = refreshOnce(EPOCH_A, PRINCIPAL_A)
+    const pA = refreshOnce(present(EPOCH_A), PRINCIPAL_A)
     await a.started
     expect(maxInFlight).toBe(1)
 
     // Queue two different-identity waiters; each chains off the LATEST pending
     // (B off A, C off B) — a strictly serial chain.
-    const pB = refreshOnce(EPOCH_B, PRINCIPAL_B)
-    const pC = refreshOnce(EPOCH_C, PRINCIPAL_C)
+    const pB = refreshOnce(present(EPOCH_B), PRINCIPAL_B)
+    const pC = refreshOnce(present(EPOCH_C), PRINCIPAL_C)
 
     // Move shared → E2 and release A; A is replaced, then B runs under E2.
     localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, EPOCH_B)
@@ -703,5 +803,110 @@ describe('singleFlightRefresh — parameter-aware single-flight', () => {
     // Three POSTs total, but never two at once.
     expect(harness.calls).toHaveLength(3)
     expect(maxInFlight).toBe(1)
+  })
+})
+
+// ────────────────────────────────────────────────────────────────────────
+// ExpectedEpoch identity in the single-flight key
+// ────────────────────────────────────────────────────────────────────────
+
+describe('singleFlightRefresh — ExpectedEpoch identity in the pending key', () => {
+  // {missing} + {missing} → share
+  it('two MISSING+MISSING callers share ONE cycle', async () => {
+    localStorage.clear()
+    const harness = stubFetch()
+    const gate = defer<Response>()
+    harness.queue.push(() => gate.promise)
+
+    const p1 = refreshOnce(MISSING, null)
+    const p2 = refreshOnce(MISSING, null)
+    expect(p2).toBe(p1) // same pending entry
+
+    gate.resolve(jsonBody(sampleLogin('t-boot'), 200))
+    const [r1, r2] = await Promise.all([p1, p2])
+    expect(r1.kind).toBe('refreshed')
+    expect(r2).toEqual(r1)
+    expect(harness.calls).toHaveLength(1)
+  })
+
+  // {present:E} + {present:E} → share (already covered by earlier test but
+  // asserted here with `present(...)` explicitly for the identity matrix).
+  it('two PRESENT-E+PRESENT-E callers share ONE cycle', async () => {
+    const harness = stubFetch()
+    const gate = defer<Response>()
+    harness.queue.push(() => gate.promise)
+
+    const p1 = refreshOnce(present(EPOCH_A), PRINCIPAL_A)
+    const p2 = refreshOnce(present(EPOCH_A), PRINCIPAL_A)
+    expect(p2).toBe(p1)
+
+    gate.resolve(jsonBody(sampleLogin('t-x'), 200))
+    await Promise.all([p1, p2])
+    expect(harness.calls).toHaveLength(1)
+  })
+
+  // The `refreshed` result exposes the effective epoch so apiClient can
+  // verify it is still current before retrying.
+  it('refreshed result includes sessionEpoch equal to the expected present epoch', async () => {
+    const harness = stubFetch()
+    harness.queue.push(() => Promise.resolve(jsonBody(sampleLogin('t-1'), 200)))
+
+    const result = await refreshOnce(present(EPOCH_A), PRINCIPAL_A)
+
+    expect(result.kind).toBe('refreshed')
+    if (result.kind === 'refreshed') {
+      expect(result.sessionEpoch).toBe(EPOCH_A)
+    }
+    expect(harness.calls).toHaveLength(1)
+  })
+
+  it('refreshed result includes sessionEpoch equal to the newly established epoch (MISSING origin)', async () => {
+    localStorage.clear()
+    const harness = stubFetch()
+    harness.queue.push(() => Promise.resolve(jsonBody(sampleLogin('t-boot'), 200)))
+
+    const result = await refreshOnce(MISSING, null)
+
+    expect(result.kind).toBe('refreshed')
+    if (result.kind === 'refreshed') {
+      const established = localStorage.getItem(SESSION_EPOCH_STORAGE_KEY)
+      expect(established).not.toBeNull()
+      expect(result.sessionEpoch).toBe(established)
+    }
+  })
+
+  // {missing} + {present:E} → do NOT share (they are different logical
+  // sessions; the second waits for the first, then runs its own cycle).
+  it('MISSING and PRESENT-E callers do NOT share the same pending entry', async () => {
+    localStorage.clear()
+    const harness = stubFetch()
+    const gateA = defer<Response>()
+    // A is a MISSING-cold-bootstrap cycle (queued first).
+    harness.queue.push(() => gateA.promise)
+    // B is a PRESENT-E cycle that runs AFTER A settles.
+    harness.queue.push(() => Promise.resolve(jsonBody(sampleLogin('t-b'), 200)))
+
+    const pMissing = refreshOnce(MISSING, null)
+    // Sibling created E_B before B's caller enters.
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, EPOCH_B)
+    const pPresent = refreshOnce(present(EPOCH_B), PRINCIPAL_A)
+
+    // Different logical-session keys → distinct promises.
+    expect(pPresent).not.toBe(pMissing)
+
+    // Release A: MISSING sees EPOCH_B present → session-replaced (zero POST
+    // for A — the "queue.push(gateA)" handler still fires, so this proves A
+    // did dispatch, but MISSING's rule is that the sibling's appearance is
+    // caught BEFORE the network call). To also cover that here, release the
+    // gate so A's promise settles even if the handler never runs.
+    gateA.resolve(jsonBody(sampleLogin('t-a'), 200))
+    const [rA, rB] = await Promise.all([pMissing, pPresent])
+
+    expect(rA.kind).toBe('session-replaced')
+    expect(rB.kind).toBe('refreshed')
+    // Verify strict serialization: at MOST one POST was ever in flight, and
+    // the MISSING caller did NOT reuse B's cycle result.
+    expect(getAccessToken()).toBe('t-b')
+    expect(getBoundEpoch()).toBe(EPOCH_B)
   })
 })

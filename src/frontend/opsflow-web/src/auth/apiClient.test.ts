@@ -844,6 +844,100 @@ describe('apiClient body type contract (replayable only)', () => {
 })
 
 // ────────────────────────────────────────────────────────────────────────
+// Post-refresh race: sibling rotates epoch AFTER refreshOnce returns but
+// BEFORE apiClient replays the original request. The epoch under which
+// the refresh succeeded must still be current at retry time.
+// ────────────────────────────────────────────────────────────────────────
+
+// Installs a fake lock manager that runs the callback, then — AFTER the
+// callback resolves but BEFORE the result propagates to the caller —
+// rotates the shared epoch. This deterministically places the sibling
+// login in the exact window between the lock release and apiClient's
+// post-refresh check, with no timers.
+function installPostLockEpochRotation(newEpoch: string): void {
+  Object.defineProperty(navigator, 'locks', {
+    configurable: true,
+    value: {
+      request: async (_name: string, ...args: unknown[]) => {
+        const callback = (typeof args[0] === 'function' ? args[0] : args[1]) as (
+          lock: unknown,
+        ) => Promise<unknown>
+        const result = await callback({})
+        localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, newEpoch)
+        return result
+      },
+    },
+  })
+}
+
+describe('apiClient post-refresh epoch race', () => {
+  it('MISSING bootstrap: throws SessionReplacedError when a sibling rotates the epoch after refresh establishes E1', async () => {
+    localStorage.clear() // no epoch — MISSING
+    // No local session — cold bootstrap
+    installPostLockEpochRotation(EPOCH_B)
+    const harness = stubFetch()
+
+    harness.queue.push(async () => new Response(null, { status: 401 })) // primary
+    harness.queue.push(async () => jsonBody(sampleLogin('t-boot'), 200)) // refresh → establishes E1
+    // NO retry response queued — proves zero retry dispatch.
+
+    await expect(apiFetch({ path: '/api/v1/cold' }))
+      .rejects.toBeInstanceOf(SessionReplacedError)
+    // Primary + refresh only — ZERO application retry.
+    expect(harness.calls).toHaveLength(2)
+    expect(harness.calls[0]!.input).toBe('/api/v1/cold')
+    expect(harness.calls[1]!.input).toBe(AUTH_REFRESH_PATH)
+    // The sibling's E2 epoch is left untouched.
+    expect(localStorage.getItem(SESSION_EPOCH_STORAGE_KEY)).toBe(EPOCH_B)
+  })
+
+  it('PRESENT-E: throws SessionReplacedError when a sibling rotates the epoch after refresh succeeds under E1', async () => {
+    setSession('token-A', PRINCIPAL_A, EPOCH_A, currentGeneration())
+    installPostLockEpochRotation(EPOCH_B)
+    const harness = stubFetch()
+
+    harness.queue.push(async () => new Response(null, { status: 401 })) // primary
+    harness.queue.push(async () => jsonBody(sampleLogin('t-new'), 200)) // refresh under EPOCH_A
+    // NO retry response queued.
+
+    await expect(apiFetch({ path: '/api/v1/mutate', method: 'POST', body: 'x' }))
+      .rejects.toBeInstanceOf(SessionReplacedError)
+    expect(harness.calls).toHaveLength(2)
+    expect(harness.calls[0]!.input).toBe('/api/v1/mutate')
+    expect(harness.calls[1]!.input).toBe(AUTH_REFRESH_PATH)
+    // Sibling's E2 epoch untouched.
+    expect(localStorage.getItem(SESSION_EPOCH_STORAGE_KEY)).toBe(EPOCH_B)
+  })
+
+  it('MISSING bootstrap: retries normally when the established epoch remains current', async () => {
+    localStorage.clear() // no epoch — MISSING
+    // Passthrough locks (default beforeEach), no post-lock rotation.
+    installPassthroughLocks()
+    const harness = stubFetch()
+
+    harness.queue.push(async () => new Response(null, { status: 401 })) // primary
+    harness.queue.push(async () => jsonBody(sampleLogin('t-boot'), 200)) // refresh → establishes epoch
+    harness.queue.push(async () => jsonBody({ ok: true }, 200)) // retry
+
+    const response = await apiFetch({ path: '/api/v1/cold' })
+
+    expect(response.status).toBe(200)
+    expect(harness.calls).toHaveLength(3)
+    expect(harness.calls[0]!.input).toBe('/api/v1/cold')
+    expect(harness.calls[1]!.input).toBe(AUTH_REFRESH_PATH)
+    expect(harness.calls[2]!.input).toBe('/api/v1/cold')
+    // Retry used the refreshed token.
+    expect((harness.calls[2]!.init!.headers as Record<string, string>).Authorization).toBe('Bearer t-boot')
+    // Session is bound to the established epoch.
+    const established = localStorage.getItem(SESSION_EPOCH_STORAGE_KEY)
+    expect(established).not.toBeNull()
+    expect(getAccessToken()).toBe('t-boot')
+    expect(getPrincipal()).toEqual(PRINCIPAL_A)
+    expect(getBoundEpoch()).toBe(established)
+  })
+})
+
+// ────────────────────────────────────────────────────────────────────────
 // Concurrent 401s (deterministic — single-flight keeps pending alive)
 // ────────────────────────────────────────────────────────────────────────
 

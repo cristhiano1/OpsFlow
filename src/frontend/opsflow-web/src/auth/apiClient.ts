@@ -37,9 +37,10 @@
 
 import { AUTH_LOGIN_PATH, AUTH_LOGOUT_PATH, AUTH_REFRESH_PATH } from './authApi'
 import { httpRequest, type HttpRequest } from './httpClient'
-import { readEpoch } from './sessionEpoch'
+import { type ExpectedEpoch, readEpoch } from './sessionEpoch'
 import {
   getAccessToken,
+  getBoundEpoch,
   getPrincipal,
   getSession,
   invalidateSession,
@@ -92,13 +93,13 @@ export class SessionReplacedError extends Error {
 }
 
 // The immutable identity of the logical session that originated a request,
-// captured BEFORE any HTTP attempt is dispatched. `epoch === null` means the
-// request carried no established session (cold start) — there is nothing to
-// protect, so those guards are skipped for it.
+// captured BEFORE any HTTP attempt is dispatched. `expected` records whether
+// an epoch existed at capture (`present`) or not (`missing`) — a `missing`
+// origin must NEVER adopt an epoch that appeared afterwards.
 interface OriginatingSession {
   token: string | null
   principal: Principal | null
-  epoch: string | null
+  expected: ExpectedEpoch
 }
 
 interface Attempt {
@@ -126,12 +127,18 @@ function attemptWithToken(request: ApiRequest, token: string | null): Attempt {
 }
 
 // True when the session that originated the request is STILL current. If the
-// epoch cannot be read now, we conservatively treat the session as no longer
-// current (block the retry) — two unreadable reads must never compare equal.
+// epoch cannot be read now, or a `missing`-origin request now sees an epoch,
+// we conservatively treat the session as no longer current (block the retry).
 function originatingSessionStillCurrent(origin: OriginatingSession): boolean {
-  if (origin.epoch !== null) {
-    const read = readEpoch()
-    if (read.status !== 'present' || read.epoch !== origin.epoch) {
+  const read = readEpoch()
+  if (origin.expected.kind === 'present') {
+    if (read.status !== 'present' || read.epoch !== origin.expected.epoch) {
+      return false
+    }
+  } else {
+    // A `missing`-origin request is only still current while the epoch is
+    // STILL missing — an epoch that appeared means the session was replaced.
+    if (read.status !== 'missing') {
       return false
     }
   }
@@ -198,12 +205,16 @@ export async function apiFetch(request: ApiRequest): Promise<Response> {
     }
   }
 
+  // Capture the epoch EXPECTATION exactly as it stands now. `missing` is
+  // preserved as a distinct state so refreshOnce cannot later adopt an epoch
+  // that a sibling creates after this request began.
+  const expected: ExpectedEpoch = epochRead.status === 'present'
+    ? { kind: 'present', epoch: epochRead.epoch }
+    : { kind: 'missing' }
   const origin: OriginatingSession = {
     token: session.token,
     principal: session.principal,
-    epoch: session.token !== null
-      ? session.boundEpoch
-      : (epochRead.status === 'present' ? epochRead.epoch : null),
+    expected,
   }
 
   // Only now dispatch, using the captured token.
@@ -237,10 +248,10 @@ export async function apiFetch(request: ApiRequest): Promise<Response> {
     return firstResponse
   }
 
-  // Normal refresh-and-retry cycle. Pass the captured epoch AND principal so
-  // refreshOnce rejects — before installing anything — a refresh that would
-  // target a sibling-replaced session or a different account.
-  const refreshOutcome = await refreshOnce(origin.epoch, origin.principal)
+  // Normal refresh-and-retry cycle. Pass the captured epoch EXPECTATION AND
+  // principal so refreshOnce rejects — before installing anything — a refresh
+  // that would adopt a sibling-created/replaced epoch or a different account.
+  const refreshOutcome = await refreshOnce(origin.expected, origin.principal)
 
   if (refreshOutcome.kind === 'unavailable') {
     throw new ApiUnavailableError(
@@ -261,11 +272,27 @@ export async function apiFetch(request: ApiRequest): Promise<Response> {
     return firstResponse
   }
 
-  // refreshOutcome.kind === 'refreshed'. refreshOnce already rejected a
-  // mismatched principal or epoch BEFORE installing, so the store holds a
-  // token for the originating session. Re-verify as belt-and-suspenders.
-  if (!originatingSessionStillCurrent(origin)) {
-    return firstResponse
+  // refreshOutcome.kind === 'refreshed'. refreshOnce already enforced the
+  // epoch expectation and the principal guard BEFORE installing. Belt-and-
+  // suspenders before replaying: the epoch under which refresh ACTUALLY
+  // succeeded must still be current in BOTH shared storage AND the local
+  // session. This closes the post-refresh race for ALL origins — including
+  // a `missing` origin that legitimately established E_new — because a
+  // sibling can rotate the shared epoch between refreshOnce returning and
+  // the retry below.
+  const refreshedPrincipal: Principal = {
+    userId: refreshOutcome.data.user.userId,
+    organizationId: refreshOutcome.data.user.organizationId,
+  }
+  const principalMatches =
+    origin.principal === null || samePrincipal(refreshedPrincipal, origin.principal)
+  const postRefreshRead = readEpoch()
+  const epochStillCurrent =
+    postRefreshRead.status === 'present'
+    && postRefreshRead.epoch === refreshOutcome.sessionEpoch
+    && getBoundEpoch() === refreshOutcome.sessionEpoch
+  if (!principalMatches || !epochStillCurrent) {
+    throw new SessionReplacedError()
   }
 
   const retry = attemptWithToken(request, getAccessToken())

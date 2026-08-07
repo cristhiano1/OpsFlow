@@ -55,6 +55,22 @@ export type EpochRead =
   | { status: 'missing' }
   | { status: 'unavailable'; error: unknown }
 
+// The originating epoch EXPECTATION a caller captured before its work began.
+// Deliberately NOT `string | null`: `missing` is a concrete state that must
+// NOT be reinterpreted as "whatever epoch exists later". A refresh keyed to
+// `{ kind: 'missing' }` may proceed ONLY if the shared epoch is STILL missing
+// when the lock is acquired; if an epoch has since appeared (a sibling
+// login/logout) the refresh must be rejected as session-replaced.
+// `unavailable` is a separate failure and never becomes an expectation.
+export type ExpectedEpoch =
+  | { kind: 'present'; epoch: string }
+  | { kind: 'missing' }
+
+export function sameExpectedEpoch(a: ExpectedEpoch, b: ExpectedEpoch): boolean {
+  if (a.kind === 'present' && b.kind === 'present') return a.epoch === b.epoch
+  return a.kind === b.kind // both 'missing'
+}
+
 // Reads the current shared epoch, distinguishing present / missing /
 // unavailable. Never throws.
 export function readEpoch(): EpochRead {

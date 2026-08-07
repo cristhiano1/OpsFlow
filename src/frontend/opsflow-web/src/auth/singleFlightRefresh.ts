@@ -39,8 +39,10 @@ import { refresh as authRefresh } from './authApi'
 import { withAuthCookieLock } from './authCookieLock'
 import type { RefreshResponse } from './contracts'
 import {
-  ensureEpoch,
+  type ExpectedEpoch,
   readEpoch,
+  rotateEpoch,
+  sameExpectedEpoch,
   SessionEpochUnavailableError,
 } from './sessionEpoch'
 import {
@@ -51,7 +53,7 @@ import {
 } from './sessionStore'
 
 export type RefreshResult =
-  | { kind: 'refreshed'; data: RefreshResponse }
+  | { kind: 'refreshed'; data: RefreshResponse; sessionEpoch: string }
   | { kind: 'unauthenticated' }
   // Superseded by a LOCAL change — this tab's generation moved (a local
   // logout / terminal auth failure) between capture and completion.
@@ -72,7 +74,7 @@ export type RefreshResult =
 // operation to settle and then evaluates its own refresh, so two same-tab
 // refreshes never run concurrently.
 interface PendingRefresh {
-  epoch: string | null
+  expected: ExpectedEpoch
   principal: Principal | null
   promise: Promise<RefreshResult>
 }
@@ -81,15 +83,15 @@ let pending: PendingRefresh | null = null
 
 function sameLogicalSession(
   a: PendingRefresh,
-  epoch: string | null,
+  expected: ExpectedEpoch,
   principal: Principal | null,
 ): boolean {
-  return a.epoch === epoch && samePrincipal(a.principal, principal)
+  return sameExpectedEpoch(a.expected, expected) && samePrincipal(a.principal, principal)
 }
 
 async function runRefreshCycle(
   capturedGeneration: number,
-  expectedEpoch: string | null,
+  expected: ExpectedEpoch,
   expectedPrincipal: Principal | null,
 ): Promise<RefreshResult> {
   try {
@@ -101,29 +103,36 @@ async function runRefreshCycle(
       }
 
       // Cross-tab epoch guard, re-read AFTER acquiring the lock. A sibling
-      // tab ahead of us in the lock queue may have logged in/out and rotated
-      // the epoch while we waited. `effectiveEpoch` is the epoch the newly
-      // refreshed token will be BOUND to.
+      // tab ahead of us in the lock queue may have logged in/out (or created
+      // the initial epoch) while we waited. `effectiveEpoch` is the epoch the
+      // newly refreshed token will be BOUND to.
+      const read = readEpoch()
+      if (read.status === 'unavailable') {
+        // Cannot evaluate the cross-tab invariant — fail closed.
+        return { kind: 'unavailable', error: read.error }
+      }
+
       let effectiveEpoch: string
-      if (expectedEpoch === null) {
-        // Cold bootstrap: no epoch captured. Establish (or adopt existing)
-        // WITHOUT treating it as a session switch, and bind the token to the
-        // established value.
-        effectiveEpoch = ensureEpoch()
-      } else {
-        const read = readEpoch()
-        if (read.status === 'unavailable') {
-          // Cannot evaluate the cross-tab invariant — fail closed.
-          return { kind: 'unavailable', error: read.error }
-        }
-        // `missing` (marker cleared) or a different value both mean the
-        // session we captured is gone.
-        if (read.status !== 'present' || read.epoch !== expectedEpoch) {
+      if (expected.kind === 'present') {
+        // Only the EXACT captured epoch may refresh. `missing` (marker
+        // cleared) or a different value both mean the session we captured is
+        // gone.
+        if (read.status !== 'present' || read.epoch !== expected.epoch) {
           return { kind: 'session-replaced' }
         }
-        // A normal refresh keeps the SAME epoch — the new token is re-bound
-        // to it, not to a new one.
-        effectiveEpoch = expectedEpoch
+        effectiveEpoch = expected.epoch
+      } else {
+        // expected.kind === 'missing'. THE P1 GUARD: a request that captured
+        // "no epoch" must NOT adopt an epoch that appeared afterwards (a
+        // sibling login/logout). If an epoch is now PRESENT, the session was
+        // replaced since capture — reject with ZERO POST.
+        if (read.status === 'present') {
+          return { kind: 'session-replaced' }
+        }
+        // Still missing under the lock (login/logout would need this same
+        // lock to create one), so THIS caller legitimately establishes the
+        // initial epoch and binds the cold refresh to it.
+        effectiveEpoch = rotateEpoch()
       }
 
       const outcome = await authRefresh()
@@ -133,17 +142,16 @@ async function runRefreshCycle(
         return { kind: 'stale' }
       }
 
-      // Post-response cross-tab epoch guard (defense in depth). login/logout
-      // cannot acquire the lock during our HTTP round-trip, but re-check
-      // anyway before installing any token.
-      if (expectedEpoch !== null) {
-        const read = readEpoch()
-        if (read.status === 'unavailable') {
-          return { kind: 'unavailable', error: read.error }
-        }
-        if (read.status !== 'present' || read.epoch !== expectedEpoch) {
-          return { kind: 'session-replaced' }
-        }
+      // Post-response cross-tab epoch guard (defense in depth): the shared
+      // epoch must still be exactly the one this token is being bound to.
+      // login/logout cannot acquire the lock during our HTTP round-trip, but
+      // re-check anyway before installing any token.
+      const postRead = readEpoch()
+      if (postRead.status === 'unavailable') {
+        return { kind: 'unavailable', error: postRead.error }
+      }
+      if (postRead.status !== 'present' || postRead.epoch !== effectiveEpoch) {
+        return { kind: 'session-replaced' }
       }
 
       if (outcome.kind === 'success') {
@@ -174,7 +182,7 @@ async function runRefreshCycle(
           // between the check and the atomic write. Same as `stale`.
           return { kind: 'stale' }
         }
-        return { kind: 'refreshed', data: outcome.data }
+        return { kind: 'refreshed', data: outcome.data, sessionEpoch: effectiveEpoch }
       }
 
       if (outcome.kind === 'unauthenticated') {
@@ -196,15 +204,17 @@ async function runRefreshCycle(
 
 // Coordinated refresh. Callers pass the identity of the logical session that
 // originated the work, captured BEFORE the originating request went out:
-//   - `expectedSessionEpoch`: the shared epoch string, or `null` for a cold
-//     bootstrap that intends to establish the initial epoch.
+//   - `expected`: the shared-epoch EXPECTATION at capture — `{ kind: 'present',
+//     epoch }` when an epoch existed, or `{ kind: 'missing' }` when none did.
+//     A `missing` expectation may only establish the initial epoch if the
+//     epoch is STILL missing under the lock; if one has appeared it is
+//     rejected as session-replaced (the P1 fix).
 //   - `expectedPrincipal`: the account the originating token belonged to, or
-//     `null` for a cold bootstrap with no prior principal.
+//     `null` for a cold caller with no prior principal.
 //
-// Concurrent callers in the same tab share one in-flight promise (and thus
-// one lock acquisition / one POST). The first caller's captured values define
-// the cycle; that is correct because concurrent in-tab callers necessarily
-// belong to the same local session.
+// Concurrent callers with the SAME logical session identity share one
+// in-flight promise (and thus one lock acquisition / one POST).
+//
 // INVARIANT (multi-waiter safety): this function performs NO `await` before it
 // assigns `pending` below, so installing a pending entry is SYNCHRONOUS and
 // atomic with respect to other synchronous `refreshOnce` calls. Consequences:
@@ -219,11 +229,11 @@ async function runRefreshCycle(
 // So N mismatched waiters behind an old pending resolve to at most ONE
 // same-tab refresh POST in flight at a time.
 export function refreshOnce(
-  expectedSessionEpoch: string | null,
+  expected: ExpectedEpoch,
   expectedPrincipal: Principal | null,
 ): Promise<RefreshResult> {
   // Same logical session as the in-flight refresh → share it (one POST).
-  if (pending !== null && sameLogicalSession(pending, expectedSessionEpoch, expectedPrincipal)) {
+  if (pending !== null && sameLogicalSession(pending, expected, expectedPrincipal)) {
     return pending.promise
   }
 
@@ -238,7 +248,7 @@ export function refreshOnce(
     }
     // Capture the generation at the moment THIS cycle actually begins, so a
     // local logout during the wait is observed.
-    return runRefreshCycle(currentGeneration(), expectedSessionEpoch, expectedPrincipal)
+    return runRefreshCycle(currentGeneration(), expected, expectedPrincipal)
   })()
 
   // Wrap with a `.finally` that clears the slot only if it is still THIS
@@ -248,7 +258,7 @@ export function refreshOnce(
       pending = null
     }
   })
-  pending = { epoch: expectedSessionEpoch, principal: expectedPrincipal, promise: wrapped }
+  pending = { expected, principal: expectedPrincipal, promise: wrapped }
   return wrapped
 }
 
