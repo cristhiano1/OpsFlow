@@ -690,6 +690,23 @@ describe('authApi.logout — session epoch rotation', () => {
     expect(after).not.toBe('epoch-before')
   })
 
+  it('treats 200 as unavailable, not successful logout (only 204 is confirmed)', async () => {
+    localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, 'epoch-old')
+    const fetchHarness = stubFetch()
+    fetchHarness.setNext(new Response(null, { status: 200 }))
+
+    const result = await logout()
+
+    expect(result.kind).toBe('unavailable')
+    expect(result.kind).not.toBe('success')
+    // NEXT remains committed — OLD is NOT restored.
+    expect(storedEpoch()).not.toBe('epoch-old')
+    expect(storedEpoch()).not.toBeNull()
+    // Exactly one logout POST occurred.
+    expect(fetchHarness.calls).toHaveLength(1)
+    expect(fetchHarness.calls[0]!.input).toBe(AUTH_LOGOUT_PATH)
+  })
+
   it('KEEPS NEXT (fails closed) when logout returns an unexpected status (no rollback-eligible failure)', async () => {
     localStorage.setItem(SESSION_EPOCH_STORAGE_KEY, 'epoch-before')
     const fetchHarness = stubFetch()

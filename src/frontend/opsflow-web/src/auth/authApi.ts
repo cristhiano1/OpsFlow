@@ -234,7 +234,7 @@ export async function logout(): Promise<LogoutOutcome> {
         return { kind: 'unavailable', error }
       }
 
-      if (response.status === 204 || response.status === 200) {
+      if (response.status === 204) {
         return { kind: 'success' } // keep NEXT
       }
 
