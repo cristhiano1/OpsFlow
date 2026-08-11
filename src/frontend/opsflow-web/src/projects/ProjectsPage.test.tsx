@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -131,5 +131,91 @@ describe('ProjectsPage', () => {
     mockListProjects.mockResolvedValue({ items: [] })
     render(<ProjectsPage />)
     expect(screen.getByRole('heading', { name: 'Projects' })).toBeInTheDocument()
+  })
+
+  it('stale initial load does not overwrite fresh post-create list', async () => {
+    const user = userEvent.setup()
+
+    type Resolve<T> = (value: T) => void
+    function deferred<T>() {
+      let resolve!: Resolve<T>
+      const promise = new Promise<T>(r => { resolve = r })
+      return { promise, resolve }
+    }
+
+    const initialLoad = deferred<{ items: { id: string; name: string; description: string | null; createdAt: string }[] }>()
+    const postCreateLoad = deferred<{ items: { id: string; name: string; description: string | null; createdAt: string }[] }>()
+
+    mockListProjects
+      .mockReturnValueOnce(initialLoad.promise)
+      .mockReturnValueOnce(postCreateLoad.promise)
+    mockCreateProject.mockResolvedValue({
+      id: 'p1', name: 'Fresh', description: null, createdAt: '2026-08-11T00:00:00Z',
+    })
+
+    render(<ProjectsPage />)
+    expect(screen.getByText('Loading projects…')).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('Name'), 'Fresh')
+    await user.click(screen.getByRole('button', { name: 'Create project' }))
+
+    postCreateLoad.resolve({
+      items: [
+        { id: 'p1', name: 'Fresh', description: null, createdAt: '2026-08-11T00:00:00Z' },
+      ],
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('Fresh')).toBeInTheDocument()
+    })
+
+    await act(async () => {
+      initialLoad.resolve({ items: [] })
+      await initialLoad.promise
+    })
+
+    expect(screen.getByText('Fresh')).toBeInTheDocument()
+    expect(screen.queryByText('No projects yet. Create one above.')).not.toBeInTheDocument()
+  })
+
+  it('stale initial load error does not overwrite fresh list', async () => {
+    const user = userEvent.setup()
+
+    type Reject = (reason: Error) => void
+    function deferredReject<T>() {
+      let reject!: Reject
+      const promise = new Promise<T>((_, r) => { reject = r as Reject })
+      return { promise, reject }
+    }
+
+    const initialLoad = deferredReject<{ items: { id: string; name: string; description: string | null; createdAt: string }[] }>()
+
+    mockListProjects
+      .mockReturnValueOnce(initialLoad.promise)
+      .mockResolvedValueOnce({
+        items: [
+          { id: 'p1', name: 'Created', description: null, createdAt: '2026-08-11T00:00:00Z' },
+        ],
+      })
+    mockCreateProject.mockResolvedValue({
+      id: 'p1', name: 'Created', description: null, createdAt: '2026-08-11T00:00:00Z',
+    })
+
+    render(<ProjectsPage />)
+
+    await user.type(screen.getByLabelText('Name'), 'Created')
+    await user.click(screen.getByRole('button', { name: 'Create project' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Created')).toBeInTheDocument()
+    })
+
+    await act(async () => {
+      initialLoad.reject(new Error('Stale network error'))
+      await initialLoad.promise.catch(() => {})
+    })
+
+    expect(screen.getByText('Created')).toBeInTheDocument()
+    expect(screen.queryByText('Stale network error')).not.toBeInTheDocument()
   })
 })

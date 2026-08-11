@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   createProject,
   listProjects,
@@ -17,22 +17,33 @@ export function ProjectsPage() {
   const [description, setDescription] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
+  const loadGenerationRef = useRef(0)
+
+  const invalidateLoads = useCallback(() => {
+    ++loadGenerationRef.current
+  }, [])
 
   const loadProjects = useCallback(async () => {
+    const generation = ++loadGenerationRef.current
     try {
       const data = await listProjects()
-      setPageState({ status: 'loaded', projects: data.items })
+      if (generation === loadGenerationRef.current) {
+        setPageState({ status: 'loaded', projects: data.items })
+      }
     } catch (err) {
-      setPageState({
-        status: 'error',
-        message: err instanceof Error ? err.message : 'Failed to load projects',
-      })
+      if (generation === loadGenerationRef.current) {
+        setPageState({
+          status: 'error',
+          message: err instanceof Error ? err.message : 'Failed to load projects',
+        })
+      }
     }
   }, [])
 
   useEffect(() => {
     void loadProjects()
-  }, [loadProjects])
+    return invalidateLoads
+  }, [loadProjects, invalidateLoads])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
