@@ -1,12 +1,13 @@
 import { render, screen } from '@testing-library/react'
+import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import userEvent from '@testing-library/user-event'
 import { describe, it, expect, vi } from 'vitest'
 import { AuthContext } from '../auth/authContext'
 import type { AuthContextValue, LoginResult } from '../auth/authContext'
 import { AuthenticatedShell } from './AuthenticatedShell'
 
-function renderShell(overrides?: Partial<AuthContextValue>) {
-  const value: AuthContextValue = {
+function makeAuthValue(overrides?: Partial<AuthContextValue>): AuthContextValue {
+  return {
     state: {
       status: 'authenticated',
       user: {
@@ -23,10 +24,20 @@ function renderShell(overrides?: Partial<AuthContextValue>) {
     retryBootstrap: vi.fn(),
     ...overrides,
   }
+}
+
+function renderShell(overrides?: Partial<AuthContextValue>) {
+  const value = makeAuthValue(overrides)
   const result = render(
-    <AuthContext value={value}>
-      <AuthenticatedShell />
-    </AuthContext>,
+    <MemoryRouter initialEntries={['/']}>
+      <AuthContext value={value}>
+        <Routes>
+          <Route path="/" element={<AuthenticatedShell />}>
+            <Route index element={<p>child content</p>} />
+          </Route>
+        </Routes>
+      </AuthContext>
+    </MemoryRouter>,
   )
   return { ...result, auth: value }
 }
@@ -34,7 +45,6 @@ function renderShell(overrides?: Partial<AuthContextValue>) {
 describe('AuthenticatedShell', () => {
   it('shows user name and organization', () => {
     renderShell()
-
     expect(screen.getByText('Alice')).toBeInTheDocument()
     expect(screen.getByText('Acme')).toBeInTheDocument()
   })
@@ -44,7 +54,18 @@ describe('AuthenticatedShell', () => {
     const { auth } = renderShell()
 
     await user.click(screen.getByRole('button', { name: 'Sign out' }))
-
     expect(auth.logout).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders the Sidebar', () => {
+    renderShell()
+    expect(
+      screen.getByRole('navigation', { name: 'Primary navigation' }),
+    ).toBeInTheDocument()
+  })
+
+  it('renders child route content via Outlet', () => {
+    renderShell()
+    expect(screen.getByText('child content')).toBeInTheDocument()
   })
 })

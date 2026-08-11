@@ -52,13 +52,18 @@
   background-color: var(--surface);
 }
 
+.shell-body {
+  display: flex;
+  flex: 1;
+}
+
 .shell-main {
   flex: 1;
   padding: 2rem 1.5rem;
 }
 
-.shell-message {
-  margin: 0;
-  max-width: 40rem;
-  color: var(--text-muted);
+@media (max-width: 48rem) {
+  .shell-body {
+    flex-direction: column;
+  }
 }

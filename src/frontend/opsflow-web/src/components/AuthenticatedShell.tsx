@@ -1,4 +1,6 @@
+import { Outlet } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
+import { Sidebar } from './Sidebar'
 import './AuthenticatedShell.css'
 
 export function AuthenticatedShell() {
@@ -24,12 +26,12 @@ export function AuthenticatedShell() {
           </button>
         </div>
       </header>
-      <main className="shell-main">
-        <p className="shell-message">
-          Welcome, {state.user.displayName}. Feature modules will be added in
-          the upcoming development phases.
-        </p>
-      </main>
+      <div className="shell-body">
+        <Sidebar />
+        <main className="shell-main">
+          <Outlet />
+        </main>
+      </div>
     </div>
   )
 }

@@ -1,0 +1,16 @@
+.dashboard-page {
+  max-width: 40rem;
+}
+
+.dashboard-heading {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.dashboard-intro {
+  margin: 0.5rem 0 0;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
