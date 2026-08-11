@@ -77,4 +77,12 @@ describe('App routing', () => {
       screen.getByRole('navigation', { name: 'Primary navigation' }),
     ).toBeInTheDocument()
   })
+
+  it('renders Projects link in sidebar at /', () => {
+    renderApp({ status: 'authenticated', user: MOCK_USER }, ['/'])
+    expect(screen.getByRole('link', { name: 'Projects' })).toHaveAttribute(
+      'href',
+      '/projects',
+    )
+  })
 })

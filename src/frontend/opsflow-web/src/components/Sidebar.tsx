@@ -8,6 +8,9 @@ export function Sidebar() {
         <NavLink to="/" end className="sidebar-nav-link">
           Dashboard
         </NavLink>
+        <NavLink to="/projects" className="sidebar-nav-link">
+          Projects
+        </NavLink>
       </nav>
     </aside>
   )

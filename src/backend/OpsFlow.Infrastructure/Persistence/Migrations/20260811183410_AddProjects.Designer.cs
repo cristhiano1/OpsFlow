@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using OpsFlow.Infrastructure.Persistence;
 
@@ -11,9 +12,11 @@ using OpsFlow.Infrastructure.Persistence;
 namespace OpsFlow.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(OpsFlowDbContext))]
-    partial class OpsFlowDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260811183410_AddProjects")]
+    partial class AddProjects
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

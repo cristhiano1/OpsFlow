@@ -2,9 +2,11 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using OpsFlow.Api.Authentication;
 using OpsFlow.Application.Authentication;
+using OpsFlow.Application.Projects;
 using OpsFlow.Infrastructure;
 using OpsFlow.Infrastructure.Configuration;
 using OpsFlow.Infrastructure.Persistence;
+using OpsFlow.Infrastructure.Projects;
 using OpsFlow.Infrastructure.Seeding;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -16,6 +18,9 @@ builder.Services.AddScoped<LoginService>();
 builder.Services.AddScoped<RefreshService>();
 builder.Services.AddScoped<LogoutService>();
 builder.Services.AddScoped<CurrentUserService>();
+builder.Services.AddScoped<IProjectRepository, EfProjectRepository>();
+builder.Services.AddScoped<CreateProjectService>();
+builder.Services.AddScoped<ListProjectsService>();
 
 var app = builder.Build();
 
