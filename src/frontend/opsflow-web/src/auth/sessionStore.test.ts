@@ -12,6 +12,7 @@ import {
   type Principal,
   samePrincipal,
   setSession,
+  subscribeSessionInvalidation,
 } from './sessionStore'
 
 const PRINCIPAL_A: Principal = {
@@ -161,5 +162,76 @@ describe('sessionStore does not touch Web Storage', () => {
     expect(getItemSpy).not.toHaveBeenCalled()
     expect(setItemSpy).not.toHaveBeenCalled()
     expect(removeItemSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('subscribeSessionInvalidation', () => {
+  beforeEach(() => {
+    _resetSessionStoreForTests()
+  })
+
+  it('notifies listeners synchronously on invalidateSession', () => {
+    const listener = vi.fn()
+    subscribeSessionInvalidation(listener)
+
+    setSession('token-1', PRINCIPAL_A, 'epoch-1', currentGeneration())
+    expect(listener).not.toHaveBeenCalled()
+
+    invalidateSession()
+
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
+
+  it('stops notifying after unsubscribe', () => {
+    const listener = vi.fn()
+    const unsubscribe = subscribeSessionInvalidation(listener)
+
+    invalidateSession()
+    expect(listener).toHaveBeenCalledTimes(1)
+
+    unsubscribe()
+    invalidateSession()
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
+
+  it('clears all listeners on reset', () => {
+    const listener = vi.fn()
+    subscribeSessionInvalidation(listener)
+
+    _resetSessionStoreForTests()
+    invalidateSession()
+
+    expect(listener).not.toHaveBeenCalled()
+  })
+
+  it('isolates faulty subscribers: later listeners still fire and invalidateSession returns', () => {
+    const listenerA = vi.fn(() => { throw new Error('boom') })
+    const listenerB = vi.fn()
+    subscribeSessionInvalidation(listenerA)
+    subscribeSessionInvalidation(listenerB)
+
+    setSession('token-1', PRINCIPAL_A, 'epoch-1', currentGeneration())
+    const before = currentGeneration()
+
+    const after = invalidateSession()
+
+    expect(listenerA).toHaveBeenCalledTimes(1)
+    expect(listenerB).toHaveBeenCalledTimes(1)
+    expect(after).toBe(before + 1)
+    expect(currentGeneration()).toBe(before + 1)
+    expect(getAccessToken()).toBeNull()
+    expect(getPrincipal()).toBeNull()
+    expect(getBoundEpoch()).toBeNull()
+  })
+
+  it('allows idempotent unsubscribe without error', () => {
+    const listener = vi.fn()
+    const unsubscribe = subscribeSessionInvalidation(listener)
+
+    unsubscribe()
+    unsubscribe()
+
+    invalidateSession()
+    expect(listener).not.toHaveBeenCalled()
   })
 })

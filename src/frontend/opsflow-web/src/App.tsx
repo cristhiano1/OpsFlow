@@ -1,19 +1,40 @@
-import './App.css'
+import { Routes, Route, Navigate } from 'react-router-dom'
+import { useAuth } from './auth/useAuth'
+import { ProtectedRoute } from './auth/ProtectedRoute'
+import { LoginPage } from './components/LoginPage'
+import { AuthenticatedShell } from './components/AuthenticatedShell'
+import { LoadingScreen } from './components/LoadingScreen'
+import { UnavailableScreen } from './components/UnavailableScreen'
+
+function LoginRoute() {
+  const { state, retryBootstrap } = useAuth()
+
+  switch (state.status) {
+    case 'loading':
+      return <LoadingScreen />
+    case 'authenticated':
+      return <Navigate to="/" replace />
+    case 'unavailable':
+      return <UnavailableScreen onRetry={retryBootstrap} />
+    case 'unauthenticated':
+      return <LoginPage />
+  }
+}
 
 function App() {
   return (
-    <div className="app-shell">
-      <header className="app-header">
-        <h1 className="app-title">OpsFlow</h1>
-        <p className="app-subtitle">Enterprise Work Management Platform</p>
-      </header>
-      <main className="app-main">
-        <p className="app-message">
-          The application foundation is ready. Feature modules will be added in
-          the upcoming development phases.
-        </p>
-      </main>
-    </div>
+    <Routes>
+      <Route path="/login" element={<LoginRoute />} />
+      <Route
+        path="/"
+        element={
+          <ProtectedRoute>
+            <AuthenticatedShell />
+          </ProtectedRoute>
+        }
+      />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   )
 }
 

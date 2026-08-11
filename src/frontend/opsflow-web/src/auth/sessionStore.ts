@@ -47,6 +47,7 @@ let accessToken: string | null = null
 let principal: Principal | null = null
 let boundEpoch: string | null = null
 let generation = 0
+const invalidationListeners = new Set<() => void>()
 
 export function getAccessToken(): string | null {
   return accessToken
@@ -99,14 +100,29 @@ export function currentGeneration(): number {
   return generation
 }
 
+export function subscribeSessionInvalidation(listener: () => void): () => void {
+  invalidationListeners.add(listener)
+  return () => { invalidationListeners.delete(listener) }
+}
+
 // Marks the current LOCAL session as gone. Clears all three fields AND bumps
 // the generation so any in-flight refresh whose result arrives later is
-// rejected by `setSession`. Returns the new generation.
+// rejected by `setSession`. Notifies invalidation subscribers synchronously
+// after the state change so React can observe the invalidation even when the
+// shared epoch does not change (no cross-tab storage event). Returns the new
+// generation.
 export function invalidateSession(): number {
   accessToken = null
   principal = null
   boundEpoch = null
   generation += 1
+  for (const listener of [...invalidationListeners]) {
+    try {
+      listener()
+    } catch {
+      // Subscriber failure must not break session invalidation.
+    }
+  }
   return generation
 }
 
@@ -116,4 +132,5 @@ export function _resetSessionStoreForTests(): void {
   principal = null
   boundEpoch = null
   generation = 0
+  invalidationListeners.clear()
 }
