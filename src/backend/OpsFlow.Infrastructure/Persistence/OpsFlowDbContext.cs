@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using OpsFlow.Domain.Organizations;
+using OpsFlow.Domain.Projects;
 using OpsFlow.Infrastructure.Identity;
 
 namespace OpsFlow.Infrastructure.Persistence;
@@ -20,6 +21,9 @@ public class OpsFlowDbContext : IdentityDbContext<ApplicationUser, IdentityRole<
 
     /// <summary>Organizations (tenants).</summary>
     public DbSet<Organization> Organizations => Set<Organization>();
+
+    /// <summary>Projects.</summary>
+    public DbSet<Project> Projects => Set<Project>();
 
     /// <summary>Refresh tokens.</summary>
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();

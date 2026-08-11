@@ -37,4 +37,23 @@ describe('Sidebar', () => {
     const link = screen.getByRole('link', { name: 'Dashboard' })
     expect(link.className).not.toContain('active')
   })
+
+  it('renders Projects link pointing to /projects', () => {
+    renderSidebar()
+    const link = screen.getByRole('link', { name: 'Projects' })
+    expect(link).toBeInTheDocument()
+    expect(link).toHaveAttribute('href', '/projects')
+  })
+
+  it('marks Projects as active when location is /projects', () => {
+    renderSidebar(['/projects'])
+    const link = screen.getByRole('link', { name: 'Projects' })
+    expect(link.className).toContain('active')
+  })
+
+  it('does not mark Projects as active on a different path', () => {
+    renderSidebar(['/'])
+    const link = screen.getByRole('link', { name: 'Projects' })
+    expect(link.className).not.toContain('active')
+  })
 })
