@@ -66,4 +66,15 @@ describe('App routing', () => {
       screen.getByText('Sign in to your account'),
     ).toBeInTheDocument()
   })
+
+  it('renders DashboardPage inside AuthenticatedShell at /', () => {
+    renderApp({ status: 'authenticated', user: MOCK_USER }, ['/'])
+    expect(
+      screen.getByRole('heading', { name: 'Dashboard' }),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Alice')).toBeInTheDocument()
+    expect(
+      screen.getByRole('navigation', { name: 'Primary navigation' }),
+    ).toBeInTheDocument()
+  })
 })

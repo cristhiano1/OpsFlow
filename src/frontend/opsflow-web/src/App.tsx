@@ -3,6 +3,7 @@ import { useAuth } from './auth/useAuth'
 import { ProtectedRoute } from './auth/ProtectedRoute'
 import { LoginPage } from './components/LoginPage'
 import { AuthenticatedShell } from './components/AuthenticatedShell'
+import { DashboardPage } from './components/DashboardPage'
 import { LoadingScreen } from './components/LoadingScreen'
 import { UnavailableScreen } from './components/UnavailableScreen'
 
@@ -32,7 +33,9 @@ function App() {
             <AuthenticatedShell />
           </ProtectedRoute>
         }
-      />
+      >
+        <Route index element={<DashboardPage />} />
+      </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )
