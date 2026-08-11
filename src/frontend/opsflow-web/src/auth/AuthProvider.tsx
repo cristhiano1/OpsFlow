@@ -18,6 +18,7 @@ import {
   currentGeneration,
   invalidateSession,
   setSession,
+  subscribeSessionInvalidation,
 } from './sessionStore'
 import { refreshOnce } from './singleFlightRefresh'
 
@@ -25,10 +26,14 @@ const MAX_BOOTSTRAP_REPLACED_RETRIES = 1
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({ status: 'loading' })
+  const stateRef = useRef<AuthState>(state)
+  stateRef.current = state
   const bootstrapAttempted = useRef(false)
   const bootstrapSeqRef = useRef(0)
+  const logoutInProgressRef = useRef(false)
 
   const runBootstrap = useCallback(() => {
+    if (logoutInProgressRef.current) return
     const version = ++bootstrapSeqRef.current
     setState({ status: 'loading' })
 
@@ -132,22 +137,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   )
 
   const handleLogout = useCallback(async (): Promise<void> => {
-    const result = await authLogout()
-    invalidateSession()
-    if (result.kind === 'success') {
-      setState({ status: 'unauthenticated' })
-    } else {
-      setState({
-        status: 'unauthenticated',
-        notice: {
-          message:
-            'Logout could not be confirmed. The server session may still be active.',
-        },
-      })
+    logoutInProgressRef.current = true
+    ++bootstrapSeqRef.current
+
+    try {
+      let result: Awaited<ReturnType<typeof authLogout>>
+
+      try {
+        result = await authLogout()
+      } catch {
+        result = { kind: 'unavailable', error: undefined }
+      }
+
+      invalidateSession()
+
+      if (result.kind === 'success') {
+        setState({ status: 'unauthenticated' })
+      } else {
+        setState({
+          status: 'unauthenticated',
+          notice: {
+            message:
+              'Logout could not be confirmed. The server session may still be active.',
+          },
+        })
+      }
+    } finally {
+      logoutInProgressRef.current = false
     }
   }, [])
 
   const retryBootstrap = useCallback(() => {
+    if (logoutInProgressRef.current) return
     runBootstrap()
   }, [runBootstrap])
 
@@ -161,11 +182,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     function handleStorageChange(event: StorageEvent) {
       if (event.key !== SESSION_EPOCH_STORAGE_KEY) return
       invalidateSession()
-      runBootstrap()
+      if (!logoutInProgressRef.current) {
+        runBootstrap()
+      }
     }
     window.addEventListener('storage', handleStorageChange)
     return () => window.removeEventListener('storage', handleStorageChange)
   }, [runBootstrap])
+
+  useEffect(() => {
+    return subscribeSessionInvalidation(() => {
+      if (stateRef.current.status === 'authenticated') {
+        setState({ status: 'unauthenticated' })
+      }
+    })
+  }, [])
 
   const value = useMemo<AuthContextValue>(
     () => ({

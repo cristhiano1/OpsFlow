@@ -16,6 +16,7 @@ vi.mock('./sessionStore', () => ({
   currentGeneration: vi.fn(),
   invalidateSession: vi.fn(),
   setSession: vi.fn(),
+  subscribeSessionInvalidation: vi.fn(),
 }))
 
 vi.mock('./authApi', () => ({
@@ -28,7 +29,7 @@ import type { LoginResult } from './authContext'
 import { useAuth } from './useAuth'
 import { refreshOnce } from './singleFlightRefresh'
 import { readEpoch } from './sessionEpoch'
-import { currentGeneration, invalidateSession, setSession } from './sessionStore'
+import { currentGeneration, invalidateSession, setSession, subscribeSessionInvalidation } from './sessionStore'
 import { login as authLogin, logout as authLogout } from './authApi'
 
 const USER_A: LoginUserResponse = {
@@ -103,8 +104,15 @@ function renderProvider() {
   )
 }
 
+let capturedInvalidationListener: (() => void) | null = null
+
 beforeEach(() => {
   vi.resetAllMocks()
+  capturedInvalidationListener = null
+  vi.mocked(subscribeSessionInvalidation).mockImplementation((listener) => {
+    capturedInvalidationListener = listener
+    return vi.fn()
+  })
   vi.mocked(readEpoch).mockReturnValue({ status: 'present', epoch: 'E1' })
   vi.mocked(refreshOnce).mockResolvedValue({ kind: 'unauthenticated' })
   vi.mocked(currentGeneration).mockReturnValue(0)
@@ -642,5 +650,233 @@ describe('cross-tab storage events', () => {
 
     expect(screen.getByTestId('status')).toHaveTextContent('authenticated')
     expect(vi.mocked(invalidateSession)).not.toHaveBeenCalled()
+  })
+})
+
+// ── P1: Local session invalidation notification ───────────
+
+describe('local session invalidation (P1)', () => {
+  it('clears authenticated state on external session invalidation', async () => {
+    vi.mocked(refreshOnce).mockResolvedValueOnce(refreshedResult(USER_A, 'E1'))
+    renderProvider()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('status')).toHaveTextContent('authenticated')
+    })
+
+    act(() => {
+      capturedInvalidationListener!()
+    })
+
+    expect(screen.getByTestId('status')).toHaveTextContent('unauthenticated')
+  })
+
+  it('ignores invalidation when state is not authenticated', async () => {
+    renderProvider()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('status')).toHaveTextContent('unauthenticated')
+    })
+
+    act(() => {
+      capturedInvalidationListener!()
+    })
+
+    expect(screen.getByTestId('status')).toHaveTextContent('unauthenticated')
+  })
+
+  it('removes invalidation listener on unmount', async () => {
+    const unsubscribe = vi.fn()
+    vi.mocked(subscribeSessionInvalidation).mockReturnValue(unsubscribe)
+
+    const { unmount } = renderProvider()
+    await waitFor(() => {
+      expect(screen.getByTestId('status')).toHaveTextContent('unauthenticated')
+    })
+
+    unmount()
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ── P2: Logout dominates outstanding bootstraps ───────────
+
+describe('logout dominates bootstraps (P2)', () => {
+  function dispatchEpochChange(newValue: string) {
+    window.dispatchEvent(
+      new StorageEvent('storage', {
+        key: 'opsflow.auth.session-epoch',
+        newValue,
+      }),
+    )
+  }
+
+  async function bootstrapToAuthenticated() {
+    vi.mocked(refreshOnce).mockResolvedValueOnce(refreshedResult(USER_A, 'E1'))
+    renderProvider()
+    await waitFor(() => {
+      expect(screen.getByTestId('status')).toHaveTextContent('authenticated')
+    })
+  }
+
+  it('logout success dominates concurrent bootstrap from storage event', async () => {
+    await bootstrapToAuthenticated()
+
+    let resolveStorageBootstrap!: (v: { kind: 'refreshed'; data: { accessToken: string; accessTokenExpiresAt: string; user: LoginUserResponse }; sessionEpoch: string }) => void
+    vi.mocked(readEpoch).mockReturnValue({ status: 'present', epoch: 'E2' })
+    vi.mocked(refreshOnce).mockReturnValueOnce(
+      new Promise((resolve) => { resolveStorageBootstrap = resolve }),
+    )
+
+    act(() => {
+      dispatchEpochChange('E2')
+    })
+
+    expect(screen.getByTestId('status')).toHaveTextContent('loading')
+
+    vi.mocked(authLogout).mockResolvedValue({ kind: 'success' })
+
+    await act(async () => {
+      screen.getByTestId('logout-btn').click()
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('status')).toHaveTextContent('unauthenticated')
+    })
+
+    await act(async () => {
+      resolveStorageBootstrap(refreshedResult(USER_B, 'E2'))
+    })
+
+    expect(screen.getByTestId('status')).toHaveTextContent('unauthenticated')
+    expect(screen.queryByTestId('notice')).toBeNull()
+  })
+
+  it('logout unavailable dominates concurrent bootstrap from storage event', async () => {
+    await bootstrapToAuthenticated()
+
+    let resolveStorageBootstrap!: (v: { kind: 'refreshed'; data: { accessToken: string; accessTokenExpiresAt: string; user: LoginUserResponse }; sessionEpoch: string }) => void
+    vi.mocked(readEpoch).mockReturnValue({ status: 'present', epoch: 'E2' })
+    vi.mocked(refreshOnce).mockReturnValueOnce(
+      new Promise((resolve) => { resolveStorageBootstrap = resolve }),
+    )
+
+    act(() => {
+      dispatchEpochChange('E2')
+    })
+
+    vi.mocked(authLogout).mockResolvedValue({
+      kind: 'unavailable',
+      error: new Error('net'),
+    })
+
+    await act(async () => {
+      screen.getByTestId('logout-btn').click()
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('status')).toHaveTextContent('unauthenticated')
+    })
+    expect(screen.getByTestId('notice')).toHaveTextContent(
+      'Logout could not be confirmed',
+    )
+
+    await act(async () => {
+      resolveStorageBootstrap(refreshedResult(USER_B, 'E2'))
+    })
+
+    expect(screen.getByTestId('status')).toHaveTextContent('unauthenticated')
+    expect(screen.getByTestId('notice')).toHaveTextContent(
+      'Logout could not be confirmed',
+    )
+  })
+
+  it('storage event during logout does not start new bootstrap', async () => {
+    await bootstrapToAuthenticated()
+
+    let resolveLogout!: (v: { kind: 'success' }) => void
+    vi.mocked(authLogout).mockReturnValue(
+      new Promise((resolve) => { resolveLogout = resolve }),
+    )
+
+    act(() => {
+      screen.getByTestId('logout-btn').click()
+    })
+
+    vi.mocked(refreshOnce).mockClear()
+
+    act(() => {
+      dispatchEpochChange('E3')
+    })
+
+    expect(vi.mocked(refreshOnce)).not.toHaveBeenCalled()
+
+    await act(async () => {
+      resolveLogout({ kind: 'success' })
+    })
+
+    expect(screen.getByTestId('status')).toHaveTextContent('unauthenticated')
+  })
+
+  it('no hidden bootstrap fires after logout settles', async () => {
+    await bootstrapToAuthenticated()
+
+    vi.mocked(authLogout).mockResolvedValue({ kind: 'success' })
+
+    await act(async () => {
+      screen.getByTestId('logout-btn').click()
+    })
+
+    expect(screen.getByTestId('status')).toHaveTextContent('unauthenticated')
+
+    const callsAfterLogout = vi.mocked(refreshOnce).mock.calls.length
+
+    await act(async () => {})
+
+    expect(vi.mocked(refreshOnce).mock.calls.length).toBe(callsAfterLogout)
+    expect(screen.getByTestId('status')).toHaveTextContent('unauthenticated')
+  })
+
+  it('unexpected authLogout rejection treated as ambiguous logout', async () => {
+    await bootstrapToAuthenticated()
+
+    vi.mocked(authLogout).mockRejectedValue(new Error('unexpected runtime error'))
+
+    await act(async () => {
+      screen.getByTestId('logout-btn').click()
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('status')).toHaveTextContent('unauthenticated')
+    })
+    expect(vi.mocked(invalidateSession)).toHaveBeenCalled()
+    expect(screen.getByTestId('notice')).toHaveTextContent(
+      'Logout could not be confirmed',
+    )
+  })
+
+  it('barrier releases after unexpected authLogout rejection so bootstrap can run', async () => {
+    await bootstrapToAuthenticated()
+
+    vi.mocked(authLogout).mockRejectedValue(new Error('unexpected runtime error'))
+
+    await act(async () => {
+      screen.getByTestId('logout-btn').click()
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('status')).toHaveTextContent('unauthenticated')
+    })
+
+    vi.mocked(refreshOnce).mockResolvedValueOnce(refreshedResult(USER_B, 'E2'))
+
+    await act(async () => {
+      screen.getByTestId('retry-btn').click()
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('status')).toHaveTextContent('authenticated')
+    })
+    expect(screen.getByTestId('user')).toHaveTextContent('Bob')
   })
 })
