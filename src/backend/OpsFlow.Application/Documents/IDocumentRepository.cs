@@ -18,4 +18,7 @@ public interface IDocumentRepository
         Guid projectId,
         Guid organizationId,
         CancellationToken cancellationToken);
+
+    /// <summary>Persists a new document metadata record.</summary>
+    Task AddAsync(Document document, CancellationToken cancellationToken);
 }

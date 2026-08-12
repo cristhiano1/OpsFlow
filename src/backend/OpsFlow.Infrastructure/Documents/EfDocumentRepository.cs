@@ -21,6 +21,13 @@ public sealed class EfDocumentRepository : IDocumentRepository
     }
 
     /// <inheritdoc />
+    public async Task AddAsync(Document document, CancellationToken cancellationToken)
+    {
+        _ = _db.Documents.Add(document);
+        _ = await _db.SaveChangesAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<IReadOnlyList<Document>> ListByProjectAsync(
         Guid projectId,
         Guid organizationId,

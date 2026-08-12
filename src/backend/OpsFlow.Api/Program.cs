@@ -25,6 +25,14 @@ builder.Services.AddScoped<CreateProjectService>();
 builder.Services.AddScoped<ListProjectsService>();
 builder.Services.AddScoped<IDocumentRepository, EfDocumentRepository>();
 builder.Services.AddScoped<ListDocumentsService>();
+builder.Services.AddOptions<DocumentStorageOptions>()
+    .Bind(builder.Configuration.GetSection(DocumentStorageOptions.SectionName))
+    .PostConfigure<IHostEnvironment>((opts, env) =>
+    {
+        opts.BasePath = DocumentStorageOptions.ResolveBasePath(opts.BasePath, env.ContentRootPath);
+    });
+builder.Services.AddSingleton<IDocumentStorage, LocalDocumentStorage>();
+builder.Services.AddScoped<UploadDocumentService>();
 
 var app = builder.Build();
 
