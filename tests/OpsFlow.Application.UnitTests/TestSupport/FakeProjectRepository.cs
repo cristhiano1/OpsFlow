@@ -11,6 +11,12 @@ internal sealed class FakeProjectRepository : IProjectRepository
 
     public Guid? ReceivedOrganizationId { get; private set; }
 
+    public bool ExistsResult { get; set; }
+
+    public Guid? ReceivedExistsProjectId { get; private set; }
+
+    public Guid? ReceivedExistsOrganizationId { get; private set; }
+
     public Task AddAsync(Project project, CancellationToken cancellationToken)
     {
         Added.Add(project);
@@ -24,5 +30,15 @@ internal sealed class FakeProjectRepository : IProjectRepository
         ReceivedOrganizationId = organizationId;
         IReadOnlyList<Project> result = ListResult ?? [];
         return Task.FromResult(result);
+    }
+
+    public Task<bool> ExistsInOrganizationAsync(
+        Guid projectId,
+        Guid organizationId,
+        CancellationToken cancellationToken)
+    {
+        ReceivedExistsProjectId = projectId;
+        ReceivedExistsOrganizationId = organizationId;
+        return Task.FromResult(ExistsResult);
     }
 }

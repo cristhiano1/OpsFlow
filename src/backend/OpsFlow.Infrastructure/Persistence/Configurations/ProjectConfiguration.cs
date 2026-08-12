@@ -22,5 +22,10 @@ internal sealed class ProjectConfiguration : IEntityTypeConfiguration<Project>
             .OnDelete(DeleteBehavior.Restrict);
 
         builder.HasIndex(p => new { p.OrganizationId, p.CreatedAt });
+
+        // Alternate key so Documents can reference Project(Id, OrganizationId)
+        // via a composite FK, preventing cross-tenant document-to-project links
+        // at the database level.
+        builder.HasAlternateKey(p => new { p.Id, p.OrganizationId });
     }
 }

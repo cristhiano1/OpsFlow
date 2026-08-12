@@ -39,4 +39,14 @@ public sealed class EfProjectRepository : IProjectRepository
             .AsNoTracking()
             .ToListAsync(cancellationToken);
     }
+
+    /// <inheritdoc />
+    public async Task<bool> ExistsInOrganizationAsync(
+        Guid projectId,
+        Guid organizationId,
+        CancellationToken cancellationToken)
+    {
+        return await _db.Projects
+            .AnyAsync(p => p.Id == projectId && p.OrganizationId == organizationId, cancellationToken);
+    }
 }
