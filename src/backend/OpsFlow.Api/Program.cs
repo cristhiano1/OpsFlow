@@ -2,10 +2,12 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using OpsFlow.Api.Authentication;
 using OpsFlow.Application.Authentication;
+using OpsFlow.Application.Documents;
 using OpsFlow.Application.Projects;
 using OpsFlow.Infrastructure;
 using OpsFlow.Infrastructure.Configuration;
 using OpsFlow.Infrastructure.Persistence;
+using OpsFlow.Infrastructure.Documents;
 using OpsFlow.Infrastructure.Projects;
 using OpsFlow.Infrastructure.Seeding;
 
@@ -21,6 +23,8 @@ builder.Services.AddScoped<CurrentUserService>();
 builder.Services.AddScoped<IProjectRepository, EfProjectRepository>();
 builder.Services.AddScoped<CreateProjectService>();
 builder.Services.AddScoped<ListProjectsService>();
+builder.Services.AddScoped<IDocumentRepository, EfDocumentRepository>();
+builder.Services.AddScoped<ListDocumentsService>();
 
 var app = builder.Build();
 

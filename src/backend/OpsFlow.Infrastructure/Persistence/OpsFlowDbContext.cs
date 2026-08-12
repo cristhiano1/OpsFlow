@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
+using OpsFlow.Domain.Documents;
 using OpsFlow.Domain.Organizations;
 using OpsFlow.Domain.Projects;
 using OpsFlow.Infrastructure.Identity;
@@ -24,6 +25,9 @@ public class OpsFlowDbContext : IdentityDbContext<ApplicationUser, IdentityRole<
 
     /// <summary>Projects.</summary>
     public DbSet<Project> Projects => Set<Project>();
+
+    /// <summary>Document metadata records.</summary>
+    public DbSet<Document> Documents => Set<Document>();
 
     /// <summary>Refresh tokens.</summary>
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();

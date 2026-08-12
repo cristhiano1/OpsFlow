@@ -16,4 +16,11 @@ public interface IProjectRepository
     /// by <c>CreatedAt</c> descending then <c>Id</c> descending.
     /// </summary>
     Task<IReadOnlyList<Project>> ListByOrganizationAsync(Guid organizationId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Returns <see langword="true"/> if a project with the given <paramref name="projectId"/>
+    /// exists and belongs to the given <paramref name="organizationId"/>; otherwise
+    /// <see langword="false"/>. Both predicates are evaluated in SQL.
+    /// </summary>
+    Task<bool> ExistsInOrganizationAsync(Guid projectId, Guid organizationId, CancellationToken cancellationToken);
 }
