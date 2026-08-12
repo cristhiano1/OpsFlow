@@ -25,4 +25,8 @@
     <PackageVersion Include="Testcontainers.MsSql" Version="4.13.0" />
   </ItemGroup>
 
+  <ItemGroup Label="Transitive security overrides">
+    <PackageVersion Include="SSH.NET" Version="2026.0.0" />
+  </ItemGroup>
+
 </Project>
