@@ -19,6 +19,17 @@ public interface IDocumentRepository
         Guid organizationId,
         CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Returns the document matching all three scoping predicates, or <c>null</c>
+    /// when no such record exists. Cross-tenant documents are indistinguishable
+    /// from nonexistent ones.
+    /// </summary>
+    Task<Document?> GetByProjectAsync(
+        Guid documentId,
+        Guid projectId,
+        Guid organizationId,
+        CancellationToken cancellationToken);
+
     /// <summary>Persists a new document metadata record.</summary>
     Task AddAsync(Document document, CancellationToken cancellationToken);
 }

@@ -212,6 +212,112 @@ public sealed class LocalDocumentStorageTests : IDisposable
     }
 
     // ================================================================
+    // OpenReadAsync — round-trip
+    // ================================================================
+
+    [Fact]
+    public async Task OpenRead_after_save_returns_exact_bytes()
+    {
+        var addr = MakeAddress();
+        var data = new byte[] { 0xDE, 0xAD, 0xBE, 0xEF };
+        using (var input = new MemoryStream(data))
+        {
+            await _storage.SaveAsync(addr, input, CancellationToken.None);
+        }
+
+        var stream = await _storage.OpenReadAsync(addr, CancellationToken.None);
+        Assert.NotNull(stream);
+        using (stream)
+        {
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+            Assert.Equal(data, ms.ToArray());
+        }
+    }
+
+    [Fact]
+    public async Task OpenRead_nonexistent_file_returns_null()
+    {
+        var addr = MakeAddress();
+        var result = await _storage.OpenReadAsync(addr, CancellationToken.None);
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task OpenRead_missing_parent_directory_returns_null()
+    {
+        var addr = new DocumentStorageAddress(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+        var result = await _storage.OpenReadAsync(addr, CancellationToken.None);
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task OpenRead_returned_stream_is_readable()
+    {
+        var addr = MakeAddress();
+        using (var input = new MemoryStream([0xAB]))
+        {
+            await _storage.SaveAsync(addr, input, CancellationToken.None);
+        }
+
+        var stream = await _storage.OpenReadAsync(addr, CancellationToken.None);
+        Assert.NotNull(stream);
+        using (stream)
+        {
+            Assert.True(stream.CanRead);
+        }
+    }
+
+    [Fact]
+    public async Task OpenRead_caller_can_dispose_returned_stream()
+    {
+        var addr = MakeAddress();
+        using (var input = new MemoryStream([0x01]))
+        {
+            await _storage.SaveAsync(addr, input, CancellationToken.None);
+        }
+
+        var stream = await _storage.OpenReadAsync(addr, CancellationToken.None);
+        Assert.NotNull(stream);
+        stream.Dispose();
+        Assert.False(stream.CanRead);
+    }
+
+    [Fact]
+    public async Task OpenRead_resolved_address_uses_guid_only()
+    {
+        var addr = MakeAddress();
+        using (var input = new MemoryStream([0xFF]))
+        {
+            await _storage.SaveAsync(addr, input, CancellationToken.None);
+        }
+
+        var stream = await _storage.OpenReadAsync(addr, CancellationToken.None);
+        Assert.NotNull(stream);
+        using (stream)
+        {
+            var path = ExpectedPath(addr);
+            Assert.Equal(addr.DocumentId.ToString("N"), Path.GetFileName(path));
+        }
+    }
+
+    [Fact]
+    public async Task OpenRead_cancellation_already_requested_throws()
+    {
+        var addr = MakeAddress();
+        using (var input = new MemoryStream([0x01]))
+        {
+            await _storage.SaveAsync(addr, input, CancellationToken.None);
+        }
+
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            _storage.OpenReadAsync(addr, cts.Token));
+    }
+
+    // ================================================================
     // Configuration validation
     // ================================================================
 

@@ -76,6 +76,39 @@ public sealed class LocalDocumentStorage : IDocumentStorage
     }
 
     /// <inheritdoc />
+    public Task<Stream?> OpenReadAsync(DocumentStorageAddress address, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(address);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var path = ResolvePath(address);
+
+        try
+        {
+            Stream stream = new FileStream(
+                path,
+                new FileStreamOptions
+                {
+                    Mode = FileMode.Open,
+                    Access = FileAccess.Read,
+                    Share = FileShare.Read,
+                    Options = FileOptions.Asynchronous | FileOptions.SequentialScan,
+                    BufferSize = 81920,
+                });
+
+            return Task.FromResult<Stream?>(stream);
+        }
+        catch (FileNotFoundException)
+        {
+            return Task.FromResult<Stream?>(null);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return Task.FromResult<Stream?>(null);
+        }
+    }
+
+    /// <inheritdoc />
     public Task DeleteAsync(DocumentStorageAddress address, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(address);

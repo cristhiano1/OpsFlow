@@ -33,6 +33,7 @@ builder.Services.AddOptions<DocumentStorageOptions>()
     });
 builder.Services.AddSingleton<IDocumentStorage, LocalDocumentStorage>();
 builder.Services.AddScoped<UploadDocumentService>();
+builder.Services.AddScoped<GetDocumentContentService>();
 
 var app = builder.Build();
 
