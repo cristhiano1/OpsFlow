@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./projectsApi', () => ({
@@ -9,6 +10,16 @@ vi.mock('./projectsApi', () => ({
 
 import { listProjects, createProject } from './projectsApi'
 import { ProjectsPage } from './ProjectsPage'
+
+function renderProjectsPage() {
+  return render(
+    <MemoryRouter initialEntries={['/projects']}>
+      <Routes>
+        <Route path="/projects" element={<ProjectsPage />} />
+      </Routes>
+    </MemoryRouter>,
+  )
+}
 
 const mockListProjects = vi.mocked(listProjects)
 const mockCreateProject = vi.mocked(createProject)
@@ -21,13 +32,13 @@ beforeEach(() => {
 describe('ProjectsPage', () => {
   it('shows loading state initially', () => {
     mockListProjects.mockReturnValue(new Promise(() => {}))
-    render(<ProjectsPage />)
+    renderProjectsPage()
     expect(screen.getByText('Loading projects…')).toBeInTheDocument()
   })
 
   it('shows empty state when no projects', async () => {
     mockListProjects.mockResolvedValue({ items: [] })
-    render(<ProjectsPage />)
+    renderProjectsPage()
     await waitFor(() => {
       expect(screen.getByText('No projects yet. Create one above.')).toBeInTheDocument()
     })
@@ -39,7 +50,7 @@ describe('ProjectsPage', () => {
         { id: 'p1', name: 'Alpha', description: 'First project', createdAt: '2026-08-10T00:00:00Z' },
       ],
     })
-    render(<ProjectsPage />)
+    renderProjectsPage()
     await waitFor(() => {
       expect(screen.getByText('Alpha')).toBeInTheDocument()
     })
@@ -48,7 +59,7 @@ describe('ProjectsPage', () => {
 
   it('shows error state on load failure', async () => {
     mockListProjects.mockRejectedValue(new Error('Network error'))
-    render(<ProjectsPage />)
+    renderProjectsPage()
     await waitFor(() => {
       expect(screen.getByText('Network error')).toBeInTheDocument()
     })
@@ -67,7 +78,7 @@ describe('ProjectsPage', () => {
       id: 'p1', name: 'New Project', description: null, createdAt: '2026-08-10T00:00:00Z',
     })
 
-    render(<ProjectsPage />)
+    renderProjectsPage()
     await waitFor(() => {
       expect(screen.getByText('No projects yet. Create one above.')).toBeInTheDocument()
     })
@@ -89,7 +100,7 @@ describe('ProjectsPage', () => {
     mockListProjects.mockResolvedValue({ items: [] })
     mockCreateProject.mockRejectedValue(new Error('Validation failed'))
 
-    render(<ProjectsPage />)
+    renderProjectsPage()
     await waitFor(() => {
       expect(screen.getByText('No projects yet. Create one above.')).toBeInTheDocument()
     })
@@ -107,7 +118,7 @@ describe('ProjectsPage', () => {
     mockListProjects.mockResolvedValue({ items: [] })
     mockCreateProject.mockReturnValue(new Promise(() => {}))
 
-    render(<ProjectsPage />)
+    renderProjectsPage()
     await waitFor(() => {
       expect(screen.getByText('No projects yet. Create one above.')).toBeInTheDocument()
     })
@@ -120,7 +131,7 @@ describe('ProjectsPage', () => {
 
   it('disables submit button when name is empty', async () => {
     mockListProjects.mockResolvedValue({ items: [] })
-    render(<ProjectsPage />)
+    renderProjectsPage()
     await waitFor(() => {
       expect(screen.getByText('No projects yet. Create one above.')).toBeInTheDocument()
     })
@@ -129,7 +140,7 @@ describe('ProjectsPage', () => {
 
   it('renders the Projects heading', async () => {
     mockListProjects.mockResolvedValue({ items: [] })
-    render(<ProjectsPage />)
+    renderProjectsPage()
     expect(screen.getByRole('heading', { name: 'Projects' })).toBeInTheDocument()
   })
 
@@ -153,7 +164,7 @@ describe('ProjectsPage', () => {
       id: 'p1', name: 'Fresh', description: null, createdAt: '2026-08-11T00:00:00Z',
     })
 
-    render(<ProjectsPage />)
+    renderProjectsPage()
     expect(screen.getByText('Loading projects…')).toBeInTheDocument()
 
     await user.type(screen.getByLabelText('Name'), 'Fresh')
@@ -176,6 +187,20 @@ describe('ProjectsPage', () => {
 
     expect(screen.getByText('Fresh')).toBeInTheDocument()
     expect(screen.queryByText('No projects yet. Create one above.')).not.toBeInTheDocument()
+  })
+
+  it('project name is a link to /projects/:projectId', async () => {
+    mockListProjects.mockResolvedValue({
+      items: [
+        { id: 'proj-99', name: 'My Project', description: null, createdAt: '2026-08-10T00:00:00Z' },
+      ],
+    })
+    renderProjectsPage()
+    await waitFor(() => {
+      expect(screen.getByText('My Project')).toBeInTheDocument()
+    })
+    const link = screen.getByRole('link', { name: 'My Project' })
+    expect(link).toHaveAttribute('href', '/projects/proj-99')
   })
 
   it('stale initial load error does not overwrite fresh list', async () => {
@@ -201,7 +226,7 @@ describe('ProjectsPage', () => {
       id: 'p1', name: 'Created', description: null, createdAt: '2026-08-11T00:00:00Z',
     })
 
-    render(<ProjectsPage />)
+    renderProjectsPage()
 
     await user.type(screen.getByLabelText('Name'), 'Created')
     await user.click(screen.getByRole('button', { name: 'Create project' }))

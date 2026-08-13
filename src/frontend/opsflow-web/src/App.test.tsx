@@ -5,6 +5,13 @@ import { AuthContext } from './auth/authContext'
 import type { AuthContextValue, AuthState, LoginResult } from './auth/authContext'
 import App from './App'
 
+vi.mock('./projects/documentsApi', () => ({
+  listDocuments: vi.fn().mockReturnValue(new Promise(() => {})),
+  uploadDocument: vi.fn(),
+  DocumentApiError: class extends Error {},
+  ProjectNotFoundError: class extends Error {},
+}))
+
 function makeContextValue(state: AuthState): AuthContextValue {
   return {
     state,
@@ -84,5 +91,18 @@ describe('App routing', () => {
       'href',
       '/projects',
     )
+  })
+
+  it('renders ProjectWorkspacePage at /projects/:projectId inside AuthenticatedShell', () => {
+    renderApp(
+      { status: 'authenticated', user: MOCK_USER },
+      ['/projects/proj-123'],
+    )
+    expect(
+      screen.getByRole('heading', { name: 'Documents' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('navigation', { name: 'Primary navigation' }),
+    ).toBeInTheDocument()
   })
 })

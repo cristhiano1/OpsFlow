@@ -123,6 +123,16 @@
   margin: 0 0 0.25rem;
 }
 
+.projects-item-link {
+  display: inline-block;
+  text-decoration: none;
+  color: var(--text);
+}
+
+.projects-item-link:hover {
+  text-decoration: underline;
+}
+
 .projects-item-description {
   font-size: 0.8125rem;
   color: var(--text-muted);
