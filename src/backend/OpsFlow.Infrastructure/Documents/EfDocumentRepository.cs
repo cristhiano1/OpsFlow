@@ -28,6 +28,21 @@ public sealed class EfDocumentRepository : IDocumentRepository
     }
 
     /// <inheritdoc />
+    public async Task<Document?> GetByProjectAsync(
+        Guid documentId,
+        Guid projectId,
+        Guid organizationId,
+        CancellationToken cancellationToken)
+    {
+        return await _db.Documents
+            .Where(d => d.Id == documentId
+                     && d.ProjectId == projectId
+                     && d.OrganizationId == organizationId)
+            .AsNoTracking()
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<IReadOnlyList<Document>> ListByProjectAsync(
         Guid projectId,
         Guid organizationId,

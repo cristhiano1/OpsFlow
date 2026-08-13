@@ -11,11 +11,28 @@ internal sealed class FakeDocumentRepository : IDocumentRepository
 
     public Guid? ReceivedOrganizationId { get; private set; }
 
+    public Document? GetByProjectResult { get; set; }
+    public Guid? ReceivedGetDocumentId { get; private set; }
+    public Guid? ReceivedGetProjectId { get; private set; }
+    public Guid? ReceivedGetOrganizationId { get; private set; }
+
     public List<Document> Added { get; } = [];
     public Exception? AddException { get; set; }
 
     public int[] SharedCallOrder { get; set; } = [0];
     public int AddCallOrder { get; private set; }
+
+    public Task<Document?> GetByProjectAsync(
+        Guid documentId,
+        Guid projectId,
+        Guid organizationId,
+        CancellationToken cancellationToken)
+    {
+        ReceivedGetDocumentId = documentId;
+        ReceivedGetProjectId = projectId;
+        ReceivedGetOrganizationId = organizationId;
+        return Task.FromResult(GetByProjectResult);
+    }
 
     public Task<IReadOnlyList<Document>> ListByProjectAsync(
         Guid projectId,

@@ -115,6 +115,69 @@ public sealed class DocumentsController : ControllerBase
         return StatusCode(StatusCodes.Status201Created, response);
     }
 
+    /// <summary>
+    /// Streams the raw content of the specified document within the
+    /// authenticated caller's organization.
+    /// </summary>
+    [HttpGet("{documentId:guid}/content")]
+    public async Task<IActionResult> GetContentAsync(
+        Guid projectId,
+        Guid documentId,
+        [FromServices] GetDocumentContentService getDocumentContentService,
+        [FromServices] ILogger<DocumentsController> logger,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetOrganizationId(out var organizationId))
+        {
+            return UnauthorizedWithoutBody();
+        }
+
+        GetDocumentContentResult result;
+        try
+        {
+            result = await getDocumentContentService.GetAsync(
+                new GetDocumentContentQuery(organizationId, projectId, documentId),
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "Unexpected storage exception for Document {DocumentId} in Project {ProjectId}, Organization {OrganizationId}",
+                documentId,
+                projectId,
+                organizationId);
+            Response.StatusCode = StatusCodes.Status500InternalServerError;
+            return new EmptyResult();
+        }
+
+        switch (result.Status)
+        {
+            case GetDocumentContentStatus.NotFound:
+                return NotFound();
+
+            case GetDocumentContentStatus.StorageMissing:
+                logger.LogWarning(
+                    "Storage object missing for Document {DocumentId} in Project {ProjectId}, Organization {OrganizationId}",
+                    documentId,
+                    projectId,
+                    organizationId);
+                Response.StatusCode = StatusCodes.Status500InternalServerError;
+                return new EmptyResult();
+
+            case GetDocumentContentStatus.Success:
+                return File(result.Content!, result.Metadata!.ContentType, result.Metadata.OriginalFileName);
+
+            default:
+                Response.StatusCode = StatusCodes.Status500InternalServerError;
+                return new EmptyResult();
+        }
+    }
+
     private bool TryGetOrganizationId(out Guid organizationId)
     {
         organizationId = Guid.Empty;
