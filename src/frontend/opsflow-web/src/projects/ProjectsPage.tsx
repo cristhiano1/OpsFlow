@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   createProject,
   listProjects,
@@ -127,7 +128,12 @@ export function ProjectsPage() {
         <ul className="projects-list">
           {pageState.projects.map(project => (
             <li key={project.id} className="projects-list-item">
-              <p className="projects-item-name">{project.name}</p>
+              <Link
+                to={project.id}
+                className="projects-item-name projects-item-link"
+              >
+                {project.name}
+              </Link>
               {project.description && (
                 <p className="projects-item-description">
                   {project.description}

@@ -5,6 +5,7 @@ import { LoginPage } from './components/LoginPage'
 import { AuthenticatedShell } from './components/AuthenticatedShell'
 import { DashboardPage } from './components/DashboardPage'
 import { ProjectsPage } from './projects/ProjectsPage'
+import { ProjectWorkspacePage } from './projects/ProjectWorkspacePage'
 import { LoadingScreen } from './components/LoadingScreen'
 import { UnavailableScreen } from './components/UnavailableScreen'
 
@@ -37,6 +38,7 @@ function App() {
       >
         <Route index element={<DashboardPage />} />
         <Route path="projects" element={<ProjectsPage />} />
+        <Route path="projects/:projectId" element={<ProjectWorkspacePage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
