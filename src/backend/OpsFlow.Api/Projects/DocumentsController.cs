@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using OpsFlow.Application.Authorization;
 using OpsFlow.Application.Documents;
 using OpsFlow.Contracts.Documents;
+using OpsFlow.Domain.Documents;
 
 namespace OpsFlow.Api.Projects;
 
@@ -177,6 +178,119 @@ public sealed class DocumentsController : ControllerBase
                 return new EmptyResult();
         }
     }
+
+    /// <summary>
+    /// Ensures a text extraction exists for the specified document. Returns the
+    /// cached result if one already exists; otherwise extracts synchronously and
+    /// persists the result.
+    /// </summary>
+    [HttpPost("{documentId:guid}/extraction")]
+    public async Task<IActionResult> ExtractTextAsync(
+        Guid projectId,
+        Guid documentId,
+        [FromServices] ExtractDocumentTextService extractService,
+        [FromServices] ILogger<DocumentsController> logger,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetOrganizationId(out var organizationId))
+        {
+            return UnauthorizedWithoutBody();
+        }
+
+        ExtractDocumentTextResult result;
+        try
+        {
+            result = await extractService.ExtractAsync(
+                new ExtractDocumentTextCommand(organizationId, projectId, documentId),
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "Unexpected extraction exception for Document {DocumentId} in Project {ProjectId}, Organization {OrganizationId}",
+                documentId,
+                projectId,
+                organizationId);
+            Response.StatusCode = StatusCodes.Status500InternalServerError;
+            return new EmptyResult();
+        }
+
+        switch (result.Status)
+        {
+            case ExtractDocumentTextStatus.NotFound:
+                return NotFound();
+
+            case ExtractDocumentTextStatus.StorageMissing:
+                logger.LogWarning(
+                    "Storage object missing for Document {DocumentId} in Project {ProjectId}, Organization {OrganizationId}",
+                    documentId,
+                    projectId,
+                    organizationId);
+                Response.StatusCode = StatusCodes.Status500InternalServerError;
+                return new EmptyResult();
+
+            case ExtractDocumentTextStatus.UnsupportedFormat:
+                return StatusCode(StatusCodes.Status415UnsupportedMediaType);
+
+            case ExtractDocumentTextStatus.MalformedDocument:
+                return UnprocessableEntity();
+
+            case ExtractDocumentTextStatus.ExtractionLimitExceeded:
+                return UnprocessableEntity();
+
+            case ExtractDocumentTextStatus.SuccessCreated:
+                return CreatedAtAction(
+                    "GetExtraction",
+                    new { projectId, documentId },
+                    MapExtractionResponse(result.Extraction!));
+
+            case ExtractDocumentTextStatus.SuccessExisting:
+                return Ok(MapExtractionResponse(result.Extraction!));
+
+            default:
+                Response.StatusCode = StatusCodes.Status500InternalServerError;
+                return new EmptyResult();
+        }
+    }
+
+    /// <summary>
+    /// Returns a previously persisted text extraction for the specified
+    /// document. Never triggers extraction or modifies the database.
+    /// </summary>
+    [HttpGet("{documentId:guid}/extraction")]
+    public async Task<IActionResult> GetExtractionAsync(
+        Guid projectId,
+        Guid documentId,
+        [FromServices] GetDocumentExtractionService getExtractionService,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetOrganizationId(out var organizationId))
+        {
+            return UnauthorizedWithoutBody();
+        }
+
+        var result = await getExtractionService.GetAsync(
+            new GetDocumentExtractionQuery(organizationId, projectId, documentId),
+            cancellationToken);
+
+        if (!result.Found)
+        {
+            return NotFound();
+        }
+
+        return Ok(MapExtractionResponse(result.Extraction!));
+    }
+
+    private static DocumentExtractionResponse MapExtractionResponse(DocumentExtraction extraction) =>
+        new(extraction.DocumentId,
+            extraction.ExtractedAt,
+            extraction.ExtractedText.Length,
+            extraction.ExtractedText);
 
     private bool TryGetOrganizationId(out Guid organizationId)
     {

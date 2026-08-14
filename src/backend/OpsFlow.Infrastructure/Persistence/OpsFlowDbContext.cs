@@ -29,6 +29,9 @@ public class OpsFlowDbContext : IdentityDbContext<ApplicationUser, IdentityRole<
     /// <summary>Document metadata records.</summary>
     public DbSet<Document> Documents => Set<Document>();
 
+    /// <summary>Document text extractions.</summary>
+    public DbSet<DocumentExtraction> DocumentExtractions => Set<DocumentExtraction>();
+
     /// <summary>Refresh tokens.</summary>
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
 
