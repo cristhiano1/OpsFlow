@@ -1,4 +1,5 @@
 using System.Text;
+using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using OpsFlow.Application.Documents;
@@ -55,24 +56,54 @@ public sealed class DocxTextExtractor : IDocumentTextExtractor
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                var text = paragraph.InnerText;
-                if (text.Length == 0)
-                {
-                    continue;
-                }
+                // Track whether this paragraph contributed any visible content so
+                // the inter-paragraph '\n' separator is only emitted when needed.
+                bool paragraphEmpty = true;
 
-                if (!first)
+                foreach (var element in paragraph.Descendants<OpenXmlElement>())
                 {
-                    _ = sb.Append('\n');
-                }
+                    // Map only the run-level content elements that carry extractable
+                    // text. Everything else (properties, styles, bookmarks, …) is
+                    // intentionally skipped.
+                    string? toAppend = element switch
+                    {
+                        Text t => t.Text ?? string.Empty,
+                        TabChar => "\t",
+                        Break => "\n",
+                        CarriageReturn => "\n",
+                        _ => null,
+                    };
 
-                first = false;
-                _ = sb.Append(text);
+                    if (toAppend is null || toAppend.Length == 0)
+                    {
+                        continue;
+                    }
 
-                if (sb.Length > maxCharacters)
-                {
-                    return Task.FromResult(
-                        DocumentTextExtractionResult.LimitExceeded());
+                    // Emit the inter-paragraph separator on the first content element
+                    // of each non-empty paragraph after the very first one.
+                    if (paragraphEmpty)
+                    {
+                        paragraphEmpty = false;
+                        if (!first)
+                        {
+                            _ = sb.Append('\n');
+                            if (sb.Length > maxCharacters)
+                            {
+                                return Task.FromResult(
+                                    DocumentTextExtractionResult.LimitExceeded());
+                            }
+                        }
+
+                        first = false;
+                    }
+
+                    _ = sb.Append(toAppend);
+
+                    if (sb.Length > maxCharacters)
+                    {
+                        return Task.FromResult(
+                            DocumentTextExtractionResult.LimitExceeded());
+                    }
                 }
             }
 
