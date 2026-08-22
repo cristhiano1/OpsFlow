@@ -52,59 +52,9 @@ public sealed class DocxTextExtractor : IDocumentTextExtractor
             var sb = new StringBuilder();
             bool first = true;
 
-            foreach (var paragraph in body.Descendants<Paragraph>())
+            if (!WalkChildren(body, sb, maxCharacters, ref first, cancellationToken))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                // Track whether this paragraph contributed any visible content so
-                // the inter-paragraph '\n' separator is only emitted when needed.
-                bool paragraphEmpty = true;
-
-                foreach (var element in ContentElements(paragraph))
-                {
-                    // Map only the run-level content elements that carry extractable
-                    // text. Everything else (properties, styles, bookmarks, …) is
-                    // intentionally skipped.
-                    string? toAppend = element switch
-                    {
-                        Text t => t.Text ?? string.Empty,
-                        TabChar => "\t",
-                        Break => "\n",
-                        CarriageReturn => "\n",
-                        _ => null,
-                    };
-
-                    if (toAppend is null || toAppend.Length == 0)
-                    {
-                        continue;
-                    }
-
-                    // Emit the inter-paragraph separator on the first content element
-                    // of each non-empty paragraph after the very first one.
-                    if (paragraphEmpty)
-                    {
-                        paragraphEmpty = false;
-                        if (!first)
-                        {
-                            _ = sb.Append('\n');
-                            if (sb.Length > maxCharacters)
-                            {
-                                return Task.FromResult(
-                                    DocumentTextExtractionResult.LimitExceeded());
-                            }
-                        }
-
-                        first = false;
-                    }
-
-                    _ = sb.Append(toAppend);
-
-                    if (sb.Length > maxCharacters)
-                    {
-                        return Task.FromResult(
-                            DocumentTextExtractionResult.LimitExceeded());
-                    }
-                }
+                return Task.FromResult(DocumentTextExtractionResult.LimitExceeded());
             }
 
             var normalized = TextNormalization.Normalize(sb.ToString());
@@ -133,25 +83,84 @@ public sealed class DocxTextExtractor : IDocumentTextExtractor
         }
     }
 
-    // Yields all descendant elements of parent that are not rooted at a nested
-    // Paragraph. This prevents the inner paragraph.Descendants traversal from
-    // descending into text-box paragraphs that the outer body.Descendants loop
-    // visits separately, which would cause their text to be emitted twice.
-    internal static IEnumerable<OpenXmlElement> ContentElements(OpenXmlElement parent)
+    internal static bool WalkChildren(
+        OpenXmlElement parent,
+        StringBuilder sb,
+        int maxCharacters,
+        ref bool first,
+        CancellationToken cancellationToken)
     {
         foreach (var child in parent.ChildElements)
         {
-            if (child is Paragraph)
+            if (!WalkElement(child, sb, maxCharacters, ref first, cancellationToken))
             {
-                continue;
-            }
-
-            yield return child;
-
-            foreach (var descendant in ContentElements(child))
-            {
-                yield return descendant;
+                return false;
             }
         }
+
+        return true;
+    }
+
+    private static bool WalkElement(
+        OpenXmlElement element,
+        StringBuilder sb,
+        int maxCharacters,
+        ref bool first,
+        CancellationToken cancellationToken)
+    {
+        if (element is Paragraph)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!first)
+            {
+                if (!TryAppendBounded(sb, '\n', maxCharacters))
+                {
+                    return false;
+                }
+            }
+
+            first = false;
+
+            return WalkChildren(element, sb, maxCharacters, ref first, cancellationToken);
+        }
+
+        string? content = element switch
+        {
+            Text t => t.Text ?? string.Empty,
+            TabChar => "\t",
+            Break => "\n",
+            CarriageReturn => "\n",
+            _ => null,
+        };
+
+        if (content is not null && content.Length > 0)
+        {
+            return TryAppendBounded(sb, content, maxCharacters);
+        }
+
+        return WalkChildren(element, sb, maxCharacters, ref first, cancellationToken);
+    }
+
+    private static bool TryAppendBounded(StringBuilder sb, char value, int maxCharacters)
+    {
+        if (1 > maxCharacters - sb.Length)
+        {
+            return false;
+        }
+
+        _ = sb.Append(value);
+        return true;
+    }
+
+    private static bool TryAppendBounded(StringBuilder sb, string value, int maxCharacters)
+    {
+        if (value.Length > maxCharacters - sb.Length)
+        {
+            return false;
+        }
+
+        _ = sb.Append(value);
+        return true;
     }
 }

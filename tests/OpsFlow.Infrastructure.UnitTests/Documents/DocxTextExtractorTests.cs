@@ -1,3 +1,4 @@
+using System.Text;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
@@ -28,6 +29,26 @@ public sealed class DocxTextExtractorTests
             }
 
             mainPart.Document = new Document(new Body(new Paragraph(run)));
+            mainPart.Document.Save();
+        }
+
+        ms.Position = 0;
+        return ms;
+    }
+
+    private static MemoryStream MakeDocxWithBodyContent(params OpenXmlElement[] bodyChildren)
+    {
+        var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            var body = new Body();
+            foreach (var child in bodyChildren)
+            {
+                body.AppendChild(child.CloneNode(true));
+            }
+
+            mainPart.Document = new Document(body);
             mainPart.Document.Save();
         }
 
@@ -154,60 +175,132 @@ public sealed class DocxTextExtractorTests
     }
 
     // ================================================================
-    // Nested paragraph deduplication (P2 fix verification)
+    // Depth-first traversal order (P2 fix verification)
     // ================================================================
 
-    // Verifies that ContentElements prunes the subtree rooted at any nested
-    // Paragraph, so that text inside a text-box paragraph is not extracted
-    // while processing the outer paragraph. We test this directly with an
-    // in-memory element tree (no DOCX round-trip) because the Open XML SDK
-    // does not re-type VML text-box content as Paragraph on deserialization.
     [Fact]
-    public void ContentElements_prunes_nested_paragraph_subtree()
+    public void Nested_paragraph_content_appears_in_document_order()
     {
-        // Build an in-memory structure where an inner Paragraph is a direct
-        // child of an outer Paragraph — the programmatic analogue of a VML
-        // text-box paragraph nested inside its enclosing paragraph.
-        var innerPara = new Paragraph(new Run(new Text("Inner")));
-        var outerPara = new Paragraph(new Run(new Text("Outer")));
-        outerPara.AppendChild(innerPara);
+        var body = new Body(new Paragraph(
+            new Run(new Text("A")),
+            new Paragraph(new Run(new Text("B"))),
+            new Run(new Text("C"))));
 
-        // A. Outer traversal must NOT expose the nested paragraph's content.
-        var outerElements = DocxTextExtractor.ContentElements(outerPara).ToList();
-        Assert.Contains(outerElements, e => e is Text t && t.Text == "Outer");
-        Assert.DoesNotContain(outerElements, e => e is Paragraph);
-        Assert.DoesNotContain(outerElements, e => e is Text t && t.Text == "Inner");
+        var sb = new StringBuilder();
+        bool first = true;
+        var result = DocxTextExtractor.WalkChildren(
+            body, sb, 1_000_000, ref first, CancellationToken.None);
 
-        // B. The nested paragraph's own traversal DOES expose its text.
-        var innerElements = DocxTextExtractor.ContentElements(innerPara).ToList();
-        Assert.Contains(innerElements, e => e is Text t && t.Text == "Inner");
+        Assert.True(result);
+        var text = sb.ToString();
+        Assert.Equal("A\nBC", text);
+        Assert.True(text.IndexOf('A') < text.IndexOf('B'));
+        Assert.True(text.IndexOf('B') < text.IndexOf('C'));
+    }
+
+    // ================================================================
+    // Blank paragraph preservation
+    // ================================================================
+
+    [Fact]
+    public async Task Blank_paragraph_between_content_paragraphs_is_preserved()
+    {
+        using var stream = MakeDocxWithBodyContent(
+            new Paragraph(new Run(new Text("A"))),
+            new Paragraph(),
+            new Paragraph(new Run(new Text("B"))));
+
+        var result = await _sut.ExtractAsync(stream, 1_000_000, CancellationToken.None);
+
+        Assert.Equal(DocumentTextExtractionOutcome.Success, result.Outcome);
+        Assert.Equal("A\n\nB", result.Text);
     }
 
     [Fact]
-    public void Each_paragraph_contributes_text_exactly_once()
+    public async Task Two_consecutive_blank_paragraphs_are_preserved()
     {
-        // Simulate body.Descendants<Paragraph>() visiting both paragraphs
-        // and collecting text via ContentElements for each.
-        var innerPara = new Paragraph(new Run(new Text("Inner")));
-        var outerPara = new Paragraph(new Run(new Text("Outer")));
-        outerPara.AppendChild(innerPara);
+        using var stream = MakeDocxWithBodyContent(
+            new Paragraph(new Run(new Text("A"))),
+            new Paragraph(),
+            new Paragraph(),
+            new Paragraph(new Run(new Text("B"))));
 
-        var body = new Body(outerPara);
-        var allText = new List<string>();
+        var result = await _sut.ExtractAsync(stream, 1_000_000, CancellationToken.None);
 
-        foreach (var para in body.Descendants<Paragraph>())
-        {
-            foreach (var el in DocxTextExtractor.ContentElements(para))
-            {
-                if (el is Text t && !string.IsNullOrEmpty(t.Text))
-                {
-                    allText.Add(t.Text);
-                }
-            }
-        }
+        Assert.Equal(DocumentTextExtractionOutcome.Success, result.Outcome);
+        Assert.Equal("A\n\n\nB", result.Text);
+    }
 
-        Assert.Equal(1, allText.Count(s => s == "Outer"));
-        Assert.Equal(1, allText.Count(s => s == "Inner"));
+    [Fact]
+    public async Task Leading_blank_paragraph_is_trimmed_by_normalization()
+    {
+        using var stream = MakeDocxWithBodyContent(
+            new Paragraph(),
+            new Paragraph(new Run(new Text("A"))));
+
+        var result = await _sut.ExtractAsync(stream, 1_000_000, CancellationToken.None);
+
+        Assert.Equal(DocumentTextExtractionOutcome.Success, result.Outcome);
+        Assert.Equal("A", result.Text);
+    }
+
+    [Fact]
+    public async Task Trailing_blank_paragraph_is_trimmed_by_normalization()
+    {
+        using var stream = MakeDocxWithBodyContent(
+            new Paragraph(new Run(new Text("A"))),
+            new Paragraph());
+
+        var result = await _sut.ExtractAsync(stream, 1_000_000, CancellationToken.None);
+
+        Assert.Equal(DocumentTextExtractionOutcome.Success, result.Outcome);
+        Assert.Equal("A", result.Text);
+    }
+
+    // ================================================================
+    // Table cell paragraph extraction
+    // ================================================================
+
+    [Fact]
+    public async Task Table_cell_paragraphs_extracted_in_document_order()
+    {
+        using var stream = MakeDocxWithBodyContent(
+            new Table(
+                new TableRow(
+                    new TableCell(
+                        new Paragraph(new Run(new Text("CellA"))),
+                        new Paragraph(new Run(new Text("CellB")))))));
+
+        var result = await _sut.ExtractAsync(stream, 1_000_000, CancellationToken.None);
+
+        Assert.Equal(DocumentTextExtractionOutcome.Success, result.Outcome);
+        Assert.Equal("CellA\nCellB", result.Text);
+    }
+
+    // ================================================================
+    // Blank paragraph limit accounting
+    // ================================================================
+
+    [Fact]
+    public async Task Blank_paragraph_separators_count_toward_character_limit()
+    {
+        // A / empty / B => "A\n\nB" = 4 characters
+        using var atLimit = MakeDocxWithBodyContent(
+            new Paragraph(new Run(new Text("A"))),
+            new Paragraph(),
+            new Paragraph(new Run(new Text("B"))));
+        var successResult = await _sut.ExtractAsync(atLimit, 4, CancellationToken.None);
+
+        Assert.Equal(DocumentTextExtractionOutcome.Success, successResult.Outcome);
+        Assert.Equal("A\n\nB", successResult.Text);
+
+        using var oneLess = MakeDocxWithBodyContent(
+            new Paragraph(new Run(new Text("A"))),
+            new Paragraph(),
+            new Paragraph(new Run(new Text("B"))));
+        var limitResult = await _sut.ExtractAsync(oneLess, 3, CancellationToken.None);
+
+        Assert.Equal(DocumentTextExtractionOutcome.LimitExceeded, limitResult.Outcome);
     }
 
     [Fact]
