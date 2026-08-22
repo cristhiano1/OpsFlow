@@ -60,7 +60,7 @@ public sealed class DocxTextExtractor : IDocumentTextExtractor
                 // the inter-paragraph '\n' separator is only emitted when needed.
                 bool paragraphEmpty = true;
 
-                foreach (var element in paragraph.Descendants<OpenXmlElement>())
+                foreach (var element in ContentElements(paragraph))
                 {
                     // Map only the run-level content elements that carry extractable
                     // text. Everything else (properties, styles, bookmarks, …) is
@@ -130,6 +130,28 @@ public sealed class DocxTextExtractor : IDocumentTextExtractor
         {
             return Task.FromResult(
                 DocumentTextExtractionResult.MalformedDocument());
+        }
+    }
+
+    // Yields all descendant elements of parent that are not rooted at a nested
+    // Paragraph. This prevents the inner paragraph.Descendants traversal from
+    // descending into text-box paragraphs that the outer body.Descendants loop
+    // visits separately, which would cause their text to be emitted twice.
+    internal static IEnumerable<OpenXmlElement> ContentElements(OpenXmlElement parent)
+    {
+        foreach (var child in parent.ChildElements)
+        {
+            if (child is Paragraph)
+            {
+                continue;
+            }
+
+            yield return child;
+
+            foreach (var descendant in ContentElements(child))
+            {
+                yield return descendant;
+            }
         }
     }
 }

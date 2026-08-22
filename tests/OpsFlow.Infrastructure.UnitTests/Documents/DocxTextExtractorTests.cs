@@ -153,6 +153,63 @@ public sealed class DocxTextExtractorTests
         Assert.Equal("A\tB\nC", result.Text);
     }
 
+    // ================================================================
+    // Nested paragraph deduplication (P2 fix verification)
+    // ================================================================
+
+    // Verifies that ContentElements prunes the subtree rooted at any nested
+    // Paragraph, so that text inside a text-box paragraph is not extracted
+    // while processing the outer paragraph. We test this directly with an
+    // in-memory element tree (no DOCX round-trip) because the Open XML SDK
+    // does not re-type VML text-box content as Paragraph on deserialization.
+    [Fact]
+    public void ContentElements_prunes_nested_paragraph_subtree()
+    {
+        // Build an in-memory structure where an inner Paragraph is a direct
+        // child of an outer Paragraph — the programmatic analogue of a VML
+        // text-box paragraph nested inside its enclosing paragraph.
+        var innerPara = new Paragraph(new Run(new Text("Inner")));
+        var outerPara = new Paragraph(new Run(new Text("Outer")));
+        outerPara.AppendChild(innerPara);
+
+        // A. Outer traversal must NOT expose the nested paragraph's content.
+        var outerElements = DocxTextExtractor.ContentElements(outerPara).ToList();
+        Assert.Contains(outerElements, e => e is Text t && t.Text == "Outer");
+        Assert.DoesNotContain(outerElements, e => e is Paragraph);
+        Assert.DoesNotContain(outerElements, e => e is Text t && t.Text == "Inner");
+
+        // B. The nested paragraph's own traversal DOES expose its text.
+        var innerElements = DocxTextExtractor.ContentElements(innerPara).ToList();
+        Assert.Contains(innerElements, e => e is Text t && t.Text == "Inner");
+    }
+
+    [Fact]
+    public void Each_paragraph_contributes_text_exactly_once()
+    {
+        // Simulate body.Descendants<Paragraph>() visiting both paragraphs
+        // and collecting text via ContentElements for each.
+        var innerPara = new Paragraph(new Run(new Text("Inner")));
+        var outerPara = new Paragraph(new Run(new Text("Outer")));
+        outerPara.AppendChild(innerPara);
+
+        var body = new Body(outerPara);
+        var allText = new List<string>();
+
+        foreach (var para in body.Descendants<Paragraph>())
+        {
+            foreach (var el in DocxTextExtractor.ContentElements(para))
+            {
+                if (el is Text t && !string.IsNullOrEmpty(t.Text))
+                {
+                    allText.Add(t.Text);
+                }
+            }
+        }
+
+        Assert.Equal(1, allText.Count(s => s == "Outer"));
+        Assert.Equal(1, allText.Count(s => s == "Inner"));
+    }
+
     [Fact]
     public async Task Separator_characters_count_toward_character_limit()
     {
