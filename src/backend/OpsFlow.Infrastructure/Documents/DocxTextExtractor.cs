@@ -13,9 +13,6 @@ namespace OpsFlow.Infrastructure.Documents;
 /// </summary>
 public sealed class DocxTextExtractor : IDocumentTextExtractor
 {
-    // 2x the application-level text limit; accounts for XML markup overhead
-    // within a single Open XML part while still bounding memory usage for a
-    // 25 MiB upload.
     internal const long MaxCharactersInPart = 10_000_000;
 
     private const string DocxContentType =
@@ -35,9 +32,15 @@ public sealed class DocxTextExtractor : IDocumentTextExtractor
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            // Office2007 models OpsFlow's actual markup capability: baseline
+            // WordprocessingML text structure. Later-version mc:Choice branches
+            // (w14, w15, …) correctly fall back via SDK MC processing.
             var settings = new OpenSettings
             {
                 MaxCharactersInPart = MaxCharactersInPart,
+                MarkupCompatibilityProcessSettings = new MarkupCompatibilityProcessSettings(
+                    MarkupCompatibilityProcessMode.ProcessLoadedPartsOnly,
+                    FileFormatVersions.Office2007),
             };
 
             using var document = WordprocessingDocument.Open(content, false, settings);
@@ -51,8 +54,9 @@ public sealed class DocxTextExtractor : IDocumentTextExtractor
 
             var sb = new StringBuilder();
             bool first = true;
+            bool afterParagraph = false;
 
-            if (!WalkChildren(body, sb, maxCharacters, ref first, cancellationToken))
+            if (!WalkChildren(body, sb, maxCharacters, ref first, ref afterParagraph, cancellationToken))
             {
                 return Task.FromResult(DocumentTextExtractionResult.LimitExceeded());
             }
@@ -68,14 +72,8 @@ public sealed class DocxTextExtractor : IDocumentTextExtractor
             return Task.FromResult(
                 DocumentTextExtractionResult.Success(normalized));
         }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (OutOfMemoryException)
-        {
-            throw;
-        }
+        catch (OperationCanceledException) { throw; }
+        catch (OutOfMemoryException) { throw; }
         catch
         {
             return Task.FromResult(
@@ -88,11 +86,12 @@ public sealed class DocxTextExtractor : IDocumentTextExtractor
         StringBuilder sb,
         int maxCharacters,
         ref bool first,
+        ref bool afterParagraph,
         CancellationToken cancellationToken)
     {
         foreach (var child in parent.ChildElements)
         {
-            if (!WalkElement(child, sb, maxCharacters, ref first, cancellationToken))
+            if (!WalkElement(child, sb, maxCharacters, ref first, ref afterParagraph, cancellationToken))
             {
                 return false;
             }
@@ -106,6 +105,7 @@ public sealed class DocxTextExtractor : IDocumentTextExtractor
         StringBuilder sb,
         int maxCharacters,
         ref bool first,
+        ref bool afterParagraph,
         CancellationToken cancellationToken)
     {
         if (element is Paragraph)
@@ -121,8 +121,15 @@ public sealed class DocxTextExtractor : IDocumentTextExtractor
             }
 
             first = false;
+            afterParagraph = false;
 
-            return WalkChildren(element, sb, maxCharacters, ref first, cancellationToken);
+            if (!WalkChildren(element, sb, maxCharacters, ref first, ref afterParagraph, cancellationToken))
+            {
+                return false;
+            }
+
+            afterParagraph = true;
+            return true;
         }
 
         string? content = element switch
@@ -136,10 +143,19 @@ public sealed class DocxTextExtractor : IDocumentTextExtractor
 
         if (content is not null && content.Length > 0)
         {
+            if (afterParagraph)
+            {
+                afterParagraph = false;
+                if (!TryAppendBounded(sb, '\n', maxCharacters))
+                {
+                    return false;
+                }
+            }
+
             return TryAppendBounded(sb, content, maxCharacters);
         }
 
-        return WalkChildren(element, sb, maxCharacters, ref first, cancellationToken);
+        return WalkChildren(element, sb, maxCharacters, ref first, ref afterParagraph, cancellationToken);
     }
 
     private static bool TryAppendBounded(StringBuilder sb, char value, int maxCharacters)

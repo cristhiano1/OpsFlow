@@ -239,6 +239,23 @@ public sealed class DocumentExtractionEndpointTests : IDisposable
     }
 
     // ================================================================
+    // PDF extraction disabled — returns 415
+    // ================================================================
+
+    [Fact]
+    public async Task POST_pdf_extraction_returns_415()
+    {
+        var (token, _, projectId) = await SeedProjectAndLoginAsync();
+        var docId = await UploadDocumentAsync(
+            token, projectId, "report.pdf", "%PDF"u8.ToArray(), "application/pdf");
+
+        using var response = await _client.SendAsync(
+            BuildPostExtractionRequest(token, projectId, docId));
+
+        Assert.Equal(HttpStatusCode.UnsupportedMediaType, response.StatusCode);
+    }
+
+    // ================================================================
     // TXT extraction
     // ================================================================
 

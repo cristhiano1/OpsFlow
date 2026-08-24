@@ -14,8 +14,6 @@ public sealed class DocxTextExtractorTests
     private const string DocxContentType =
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
-    // Creates an in-memory DOCX containing a single paragraph whose run holds
-    // the supplied child elements in document order.
     private static MemoryStream MakeDocxWithRun(params DocumentFormat.OpenXml.OpenXmlElement[] runChildren)
     {
         var ms = new MemoryStream();
@@ -132,7 +130,6 @@ public sealed class DocxTextExtractorTests
     [Fact]
     public async Task Tab_is_preserved_as_tab_character()
     {
-        // Text("A") + TabChar + Text("B") must extract as "A\tB", not "AB"
         using var stream = MakeDocxWithRun(new Text("A"), new TabChar(), new Text("B"));
         var result = await _sut.ExtractAsync(stream, 100, CancellationToken.None);
 
@@ -143,7 +140,6 @@ public sealed class DocxTextExtractorTests
     [Fact]
     public async Task Break_is_preserved_as_newline()
     {
-        // Text("A") + Break + Text("B") must extract as "A\nB", not "AB"
         using var stream = MakeDocxWithRun(new Text("A"), new Break(), new Text("B"));
         var result = await _sut.ExtractAsync(stream, 100, CancellationToken.None);
 
@@ -154,7 +150,6 @@ public sealed class DocxTextExtractorTests
     [Fact]
     public async Task CarriageReturn_is_preserved_as_newline()
     {
-        // Text("A") + CarriageReturn + Text("B") must extract as "A\nB", not "AB"
         using var stream = MakeDocxWithRun(new Text("A"), new CarriageReturn(), new Text("B"));
         var result = await _sut.ExtractAsync(stream, 100, CancellationToken.None);
 
@@ -165,7 +160,6 @@ public sealed class DocxTextExtractorTests
     [Fact]
     public async Task Mixed_tab_break_text_preserved_in_document_order()
     {
-        // Text("A") + Tab + Text("B") + Break + Text("C") => "A\tB\nC"
         using var stream = MakeDocxWithRun(
             new Text("A"), new TabChar(), new Text("B"), new Break(), new Text("C"));
         var result = await _sut.ExtractAsync(stream, 100, CancellationToken.None);
@@ -175,7 +169,7 @@ public sealed class DocxTextExtractorTests
     }
 
     // ================================================================
-    // Depth-first traversal order (P2 fix verification)
+    // Depth-first traversal order — nested paragraph boundary
     // ================================================================
 
     [Fact]
@@ -188,14 +182,52 @@ public sealed class DocxTextExtractorTests
 
         var sb = new StringBuilder();
         bool first = true;
+        bool afterParagraph = false;
         var result = DocxTextExtractor.WalkChildren(
-            body, sb, 1_000_000, ref first, CancellationToken.None);
+            body, sb, 1_000_000, ref first, ref afterParagraph, CancellationToken.None);
 
         Assert.True(result);
         var text = sb.ToString();
-        Assert.Equal("A\nBC", text);
+        Assert.Equal("A\nB\nC", text);
         Assert.True(text.IndexOf('A') < text.IndexOf('B'));
         Assert.True(text.IndexOf('B') < text.IndexOf('C'));
+    }
+
+    [Fact]
+    public void Nested_empty_paragraph_produces_blank_boundary()
+    {
+        var body = new Body(new Paragraph(
+            new Run(new Text("A")),
+            new Paragraph(),
+            new Run(new Text("C"))));
+
+        var sb = new StringBuilder();
+        bool first = true;
+        bool afterParagraph = false;
+        var result = DocxTextExtractor.WalkChildren(
+            body, sb, 1_000_000, ref first, ref afterParagraph, CancellationToken.None);
+
+        Assert.True(result);
+        Assert.Equal("A\n\nC", sb.ToString());
+    }
+
+    [Fact]
+    public void Consecutive_nested_paragraphs_with_trailing_content()
+    {
+        var body = new Body(new Paragraph(
+            new Run(new Text("A")),
+            new Paragraph(new Run(new Text("B"))),
+            new Paragraph(new Run(new Text("C"))),
+            new Run(new Text("D"))));
+
+        var sb = new StringBuilder();
+        bool first = true;
+        bool afterParagraph = false;
+        var result = DocxTextExtractor.WalkChildren(
+            body, sb, 1_000_000, ref first, ref afterParagraph, CancellationToken.None);
+
+        Assert.True(result);
+        Assert.Equal("A\nB\nC\nD", sb.ToString());
     }
 
     // ================================================================
@@ -278,13 +310,86 @@ public sealed class DocxTextExtractorTests
     }
 
     // ================================================================
-    // Blank paragraph limit accounting
+    // AlternateContent — SDK MC processing
+    // ================================================================
+
+    [Fact]
+    public async Task AlternateContent_w14_selects_fallback_under_office2007_target()
+    {
+        using var stream = MakeDocxWithAlternateContentXml(
+            choiceText: "CHOICE",
+            fallbackText: "FALLBACK",
+            requiresPrefix: "w14",
+            requiresNamespaceUri: "http://schemas.microsoft.com/office/word/2010/wordml");
+
+        var result = await _sut.ExtractAsync(stream, 1_000_000, CancellationToken.None);
+
+        Assert.Equal(DocumentTextExtractionOutcome.Success, result.Outcome);
+        Assert.Contains("FALLBACK", result.Text);
+        Assert.DoesNotContain("CHOICE", result.Text);
+        Assert.Equal(1, result.Text!.Split("FALLBACK").Length - 1);
+    }
+
+    [Fact]
+    public async Task AlternateContent_selects_fallback_for_unsupported_namespace()
+    {
+        using var stream = MakeDocxWithAlternateContentXml(
+            choiceText: "CHOICE",
+            fallbackText: "FALLBACK",
+            requiresPrefix: "futurens",
+            requiresNamespaceUri: "http://example.com/unsupported/2099/namespace");
+
+        var result = await _sut.ExtractAsync(stream, 1_000_000, CancellationToken.None);
+
+        Assert.Equal(DocumentTextExtractionOutcome.Success, result.Outcome);
+        Assert.Contains("FALLBACK", result.Text);
+        Assert.DoesNotContain("CHOICE", result.Text);
+    }
+
+    private static MemoryStream MakeDocxWithAlternateContentXml(
+        string choiceText, string fallbackText,
+        string requiresPrefix, string requiresNamespaceUri)
+    {
+        var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            var xml =
+                $"""
+                 <?xml version="1.0" encoding="utf-8"?>
+                 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+                             xmlns:{requiresPrefix}="{requiresNamespaceUri}"
+                             mc:Ignorable="{requiresPrefix}">
+                   <w:body>
+                     <w:p>
+                       <mc:AlternateContent>
+                         <mc:Choice Requires="{requiresPrefix}">
+                           <w:r><w:t>{choiceText}</w:t></w:r>
+                         </mc:Choice>
+                         <mc:Fallback>
+                           <w:r><w:t>{fallbackText}</w:t></w:r>
+                         </mc:Fallback>
+                       </mc:AlternateContent>
+                     </w:p>
+                   </w:body>
+                 </w:document>
+                 """;
+            using var writer = new StreamWriter(mainPart.GetStream());
+            writer.Write(xml);
+        }
+
+        ms.Position = 0;
+        return ms;
+    }
+
+    // ================================================================
+    // Limit accounting — blank paragraph boundaries
     // ================================================================
 
     [Fact]
     public async Task Blank_paragraph_separators_count_toward_character_limit()
     {
-        // A / empty / B => "A\n\nB" = 4 characters
         using var atLimit = MakeDocxWithBodyContent(
             new Paragraph(new Run(new Text("A"))),
             new Paragraph(),
@@ -306,7 +411,6 @@ public sealed class DocxTextExtractorTests
     [Fact]
     public async Task Separator_characters_count_toward_character_limit()
     {
-        // "A\tB" is 3 characters — exactly at limit succeeds, one below fails
         using var atLimit = MakeDocxWithRun(new Text("A"), new TabChar(), new Text("B"));
         var successResult = await _sut.ExtractAsync(atLimit, 3, CancellationToken.None);
 
@@ -317,5 +421,63 @@ public sealed class DocxTextExtractorTests
         var limitResult = await _sut.ExtractAsync(oneLess, 2, CancellationToken.None);
 
         Assert.Equal(DocumentTextExtractionOutcome.LimitExceeded, limitResult.Outcome);
+    }
+
+    // ================================================================
+    // Limit accounting — nested paragraph boundary
+    // ================================================================
+
+    [Fact]
+    public void Nested_paragraph_boundary_counts_toward_character_limit()
+    {
+        // P(A, P(B), C) => "A\nB\nC" = 5 characters
+        var body = new Body(new Paragraph(
+            new Run(new Text("A")),
+            new Paragraph(new Run(new Text("B"))),
+            new Run(new Text("C"))));
+
+        var sbOk = new StringBuilder();
+        bool first1 = true;
+        bool after1 = false;
+        var ok = DocxTextExtractor.WalkChildren(
+            body, sbOk, 5, ref first1, ref after1, CancellationToken.None);
+
+        Assert.True(ok);
+        Assert.Equal("A\nB\nC", sbOk.ToString());
+
+        var sbFail = new StringBuilder();
+        bool first2 = true;
+        bool after2 = false;
+        var exceeded = DocxTextExtractor.WalkChildren(
+            body, sbFail, 4, ref first2, ref after2, CancellationToken.None);
+
+        Assert.False(exceeded);
+    }
+
+    [Fact]
+    public void Nested_empty_paragraph_boundary_counts_toward_character_limit()
+    {
+        // P(A, P(), C) => "A\n\nC" = 4 characters
+        var body = new Body(new Paragraph(
+            new Run(new Text("A")),
+            new Paragraph(),
+            new Run(new Text("C"))));
+
+        var sbOk = new StringBuilder();
+        bool first1 = true;
+        bool after1 = false;
+        var ok = DocxTextExtractor.WalkChildren(
+            body, sbOk, 4, ref first1, ref after1, CancellationToken.None);
+
+        Assert.True(ok);
+        Assert.Equal("A\n\nC", sbOk.ToString());
+
+        var sbFail = new StringBuilder();
+        bool first2 = true;
+        bool after2 = false;
+        var exceeded = DocxTextExtractor.WalkChildren(
+            body, sbFail, 3, ref first2, ref after2, CancellationToken.None);
+
+        Assert.False(exceeded);
     }
 }

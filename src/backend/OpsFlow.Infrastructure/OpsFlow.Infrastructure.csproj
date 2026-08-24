@@ -4,7 +4,6 @@
     <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" />
     <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" />
     <PackageReference Include="Microsoft.IdentityModel.Tokens" />
-    <PackageReference Include="PdfPig" />
     <PackageReference Include="DocumentFormat.OpenXml" />
   </ItemGroup>
   <ItemGroup>
