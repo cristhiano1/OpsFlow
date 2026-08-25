@@ -6,8 +6,11 @@
     <!-- Test-only conventions (this project is entirely test code):
          CS1591 (test types are not a public API surface; no XML docs),
          CA1707 (underscores in test method names),
-         IDE1006 (async test methods do not use the "Async" suffix). -->
-    <NoWarn>$(NoWarn);CS1591;CA1707;IDE1006</NoWarn>
+         IDE1006 (async test methods do not use the "Async" suffix),
+         IDE0058 (Assert.Throws return value is intentionally discarded),
+         IDE0059 (unused deconstruct variables in test setup),
+         IDE0290 (test helpers use explicit constructors). -->
+    <NoWarn>$(NoWarn);CS1591;CA1707;IDE1006;IDE0058;IDE0059;IDE0290</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

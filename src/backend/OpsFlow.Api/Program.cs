@@ -34,6 +34,11 @@ builder.Services.AddOptions<DocumentStorageOptions>()
 builder.Services.AddSingleton<IDocumentStorage, LocalDocumentStorage>();
 builder.Services.AddScoped<UploadDocumentService>();
 builder.Services.AddScoped<GetDocumentContentService>();
+builder.Services.AddScoped<IDocumentExtractionRepository, EfDocumentExtractionRepository>();
+builder.Services.AddSingleton<IDocumentTextExtractor, PlainTextExtractor>();
+builder.Services.AddSingleton<IDocumentTextExtractor, DocxTextExtractor>();
+builder.Services.AddScoped<ExtractDocumentTextService>();
+builder.Services.AddScoped<GetDocumentExtractionService>();
 
 var app = builder.Build();
 
