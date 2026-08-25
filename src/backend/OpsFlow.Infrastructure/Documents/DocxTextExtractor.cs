@@ -14,6 +14,7 @@ namespace OpsFlow.Infrastructure.Documents;
 public sealed class DocxTextExtractor : IDocumentTextExtractor
 {
     internal const long MaxCharactersInPart = 10_000_000;
+    internal const int MaxTraversalDepth = 256;
 
     private const string DocxContentType =
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -56,7 +57,7 @@ public sealed class DocxTextExtractor : IDocumentTextExtractor
             bool first = true;
             bool afterParagraph = false;
 
-            if (!WalkChildren(body, sb, maxCharacters, ref first, ref afterParagraph, cancellationToken))
+            if (!WalkChildren(body, sb, maxCharacters, ref first, ref afterParagraph, depth: 0, cancellationToken))
             {
                 return Task.FromResult(DocumentTextExtractionResult.LimitExceeded());
             }
@@ -87,11 +88,12 @@ public sealed class DocxTextExtractor : IDocumentTextExtractor
         int maxCharacters,
         ref bool first,
         ref bool afterParagraph,
+        int depth,
         CancellationToken cancellationToken)
     {
         foreach (var child in parent.ChildElements)
         {
-            if (!WalkElement(child, sb, maxCharacters, ref first, ref afterParagraph, cancellationToken))
+            if (!WalkElement(child, sb, maxCharacters, ref first, ref afterParagraph, depth, cancellationToken))
             {
                 return false;
             }
@@ -106,8 +108,14 @@ public sealed class DocxTextExtractor : IDocumentTextExtractor
         int maxCharacters,
         ref bool first,
         ref bool afterParagraph,
+        int depth,
         CancellationToken cancellationToken)
     {
+        if (depth > MaxTraversalDepth)
+        {
+            return false;
+        }
+
         if (element is Paragraph)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -123,7 +131,7 @@ public sealed class DocxTextExtractor : IDocumentTextExtractor
             first = false;
             afterParagraph = false;
 
-            if (!WalkChildren(element, sb, maxCharacters, ref first, ref afterParagraph, cancellationToken))
+            if (!WalkChildren(element, sb, maxCharacters, ref first, ref afterParagraph, depth + 1, cancellationToken))
             {
                 return false;
             }
@@ -138,6 +146,8 @@ public sealed class DocxTextExtractor : IDocumentTextExtractor
             TabChar => "\t",
             Break => "\n",
             CarriageReturn => "\n",
+            NoBreakHyphen => "‑",
+            SoftHyphen => "­",
             _ => null,
         };
 
@@ -155,7 +165,7 @@ public sealed class DocxTextExtractor : IDocumentTextExtractor
             return TryAppendBounded(sb, content, maxCharacters);
         }
 
-        return WalkChildren(element, sb, maxCharacters, ref first, ref afterParagraph, cancellationToken);
+        return WalkChildren(element, sb, maxCharacters, ref first, ref afterParagraph, depth + 1, cancellationToken);
     }
 
     private static bool TryAppendBounded(StringBuilder sb, char value, int maxCharacters)

@@ -184,7 +184,7 @@ public sealed class DocxTextExtractorTests
         bool first = true;
         bool afterParagraph = false;
         var result = DocxTextExtractor.WalkChildren(
-            body, sb, 1_000_000, ref first, ref afterParagraph, CancellationToken.None);
+            body, sb, 1_000_000, ref first, ref afterParagraph, depth: 0, CancellationToken.None);
 
         Assert.True(result);
         var text = sb.ToString();
@@ -205,7 +205,7 @@ public sealed class DocxTextExtractorTests
         bool first = true;
         bool afterParagraph = false;
         var result = DocxTextExtractor.WalkChildren(
-            body, sb, 1_000_000, ref first, ref afterParagraph, CancellationToken.None);
+            body, sb, 1_000_000, ref first, ref afterParagraph, depth: 0, CancellationToken.None);
 
         Assert.True(result);
         Assert.Equal("A\n\nC", sb.ToString());
@@ -224,7 +224,7 @@ public sealed class DocxTextExtractorTests
         bool first = true;
         bool afterParagraph = false;
         var result = DocxTextExtractor.WalkChildren(
-            body, sb, 1_000_000, ref first, ref afterParagraph, CancellationToken.None);
+            body, sb, 1_000_000, ref first, ref afterParagraph, depth: 0, CancellationToken.None);
 
         Assert.True(result);
         Assert.Equal("A\nB\nC\nD", sb.ToString());
@@ -440,7 +440,7 @@ public sealed class DocxTextExtractorTests
         bool first1 = true;
         bool after1 = false;
         var ok = DocxTextExtractor.WalkChildren(
-            body, sbOk, 5, ref first1, ref after1, CancellationToken.None);
+            body, sbOk, 5, ref first1, ref after1, depth: 0, CancellationToken.None);
 
         Assert.True(ok);
         Assert.Equal("A\nB\nC", sbOk.ToString());
@@ -449,7 +449,7 @@ public sealed class DocxTextExtractorTests
         bool first2 = true;
         bool after2 = false;
         var exceeded = DocxTextExtractor.WalkChildren(
-            body, sbFail, 4, ref first2, ref after2, CancellationToken.None);
+            body, sbFail, 4, ref first2, ref after2, depth: 0, CancellationToken.None);
 
         Assert.False(exceeded);
     }
@@ -467,7 +467,7 @@ public sealed class DocxTextExtractorTests
         bool first1 = true;
         bool after1 = false;
         var ok = DocxTextExtractor.WalkChildren(
-            body, sbOk, 4, ref first1, ref after1, CancellationToken.None);
+            body, sbOk, 4, ref first1, ref after1, depth: 0, CancellationToken.None);
 
         Assert.True(ok);
         Assert.Equal("A\n\nC", sbOk.ToString());
@@ -476,8 +476,147 @@ public sealed class DocxTextExtractorTests
         bool first2 = true;
         bool after2 = false;
         var exceeded = DocxTextExtractor.WalkChildren(
-            body, sbFail, 3, ref first2, ref after2, CancellationToken.None);
+            body, sbFail, 3, ref first2, ref after2, depth: 0, CancellationToken.None);
 
         Assert.False(exceeded);
+    }
+
+    // ================================================================
+    // MaxTraversalDepth constant
+    // ================================================================
+
+    [Fact]
+    public void MaxTraversalDepth_is_256()
+    {
+        Assert.Equal(256, DocxTextExtractor.MaxTraversalDepth);
+    }
+
+    // ================================================================
+    // Depth limit — traversal
+    // ================================================================
+
+    [Fact]
+    public void Traversal_at_max_depth_succeeds()
+    {
+        // Chain: root → 254 inner Bodies → Paragraph → Run → Text
+        // Text hits WalkElement at depth 255+1 = 256; 256 > 256 is false → passes
+        var leaf = new Run(new Text("deep"));
+        OpenXmlElement current = new Paragraph(leaf);
+        for (int i = 0; i < 254; i++)
+        {
+            current = new Body(current);
+        }
+
+        var root = new Body(current);
+
+        var sb = new StringBuilder();
+        bool first = true;
+        bool afterParagraph = false;
+        var result = DocxTextExtractor.WalkChildren(
+            root, sb, 1_000_000, ref first, ref afterParagraph, depth: 0, CancellationToken.None);
+
+        Assert.True(result);
+        Assert.Contains("deep", sb.ToString());
+    }
+
+    [Fact]
+    public void Traversal_exceeding_max_depth_returns_false()
+    {
+        // Chain: root → 255 inner Bodies → Paragraph → Run → Text
+        // Text hits WalkElement at depth 256+1 = 257; 257 > 256 is true → rejected
+        var leaf = new Run(new Text("deep"));
+        OpenXmlElement current = new Paragraph(leaf);
+        for (int i = 0; i < 255; i++)
+        {
+            current = new Body(current);
+        }
+
+        var root = new Body(current);
+
+        var sb = new StringBuilder();
+        bool first = true;
+        bool afterParagraph = false;
+        var result = DocxTextExtractor.WalkChildren(
+            root, sb, 1_000_000, ref first, ref afterParagraph, depth: 0, CancellationToken.None);
+
+        Assert.False(result);
+    }
+
+    [Fact]
+    public void Wide_but_shallow_document_is_not_affected_by_depth_limit()
+    {
+        var body = new Body();
+        for (int i = 0; i < 500; i++)
+        {
+            body.AppendChild(new Paragraph(new Run(new Text($"P{i}"))));
+        }
+
+        var sb = new StringBuilder();
+        bool first = true;
+        bool afterParagraph = false;
+        var result = DocxTextExtractor.WalkChildren(
+            body, sb, 1_000_000, ref first, ref afterParagraph, depth: 0, CancellationToken.None);
+
+        Assert.True(result);
+        Assert.Contains("P0", sb.ToString());
+        Assert.Contains("P499", sb.ToString());
+    }
+
+    // ================================================================
+    // NoBreakHyphen / SoftHyphen fidelity (P2 fix verification)
+    // ================================================================
+
+    [Fact]
+    public async Task NoBreakHyphen_is_preserved_as_non_breaking_hyphen()
+    {
+        using var stream = MakeDocxWithRun(new Text("A"), new NoBreakHyphen(), new Text("B"));
+        var result = await _sut.ExtractAsync(stream, 100, CancellationToken.None);
+
+        Assert.Equal(DocumentTextExtractionOutcome.Success, result.Outcome);
+        Assert.Equal("A‑B", result.Text);
+    }
+
+    [Fact]
+    public async Task SoftHyphen_is_preserved_as_soft_hyphen()
+    {
+        using var stream = MakeDocxWithRun(new Text("A"), new SoftHyphen(), new Text("B"));
+        var result = await _sut.ExtractAsync(stream, 100, CancellationToken.None);
+
+        Assert.Equal(DocumentTextExtractionOutcome.Success, result.Outcome);
+        Assert.Equal("A­B", result.Text);
+    }
+
+    // ================================================================
+    // Limit accounting — hyphen elements
+    // ================================================================
+
+    [Fact]
+    public async Task NoBreakHyphen_counts_toward_character_limit()
+    {
+        using var atLimit = MakeDocxWithRun(new Text("A"), new NoBreakHyphen(), new Text("B"));
+        var successResult = await _sut.ExtractAsync(atLimit, 3, CancellationToken.None);
+
+        Assert.Equal(DocumentTextExtractionOutcome.Success, successResult.Outcome);
+        Assert.Equal("A‑B", successResult.Text);
+
+        using var oneLess = MakeDocxWithRun(new Text("A"), new NoBreakHyphen(), new Text("B"));
+        var limitResult = await _sut.ExtractAsync(oneLess, 2, CancellationToken.None);
+
+        Assert.Equal(DocumentTextExtractionOutcome.LimitExceeded, limitResult.Outcome);
+    }
+
+    [Fact]
+    public async Task SoftHyphen_counts_toward_character_limit()
+    {
+        using var atLimit = MakeDocxWithRun(new Text("A"), new SoftHyphen(), new Text("B"));
+        var successResult = await _sut.ExtractAsync(atLimit, 3, CancellationToken.None);
+
+        Assert.Equal(DocumentTextExtractionOutcome.Success, successResult.Outcome);
+        Assert.Equal("A­B", successResult.Text);
+
+        using var oneLess = MakeDocxWithRun(new Text("A"), new SoftHyphen(), new Text("B"));
+        var limitResult = await _sut.ExtractAsync(oneLess, 2, CancellationToken.None);
+
+        Assert.Equal(DocumentTextExtractionOutcome.LimitExceeded, limitResult.Outcome);
     }
 }
