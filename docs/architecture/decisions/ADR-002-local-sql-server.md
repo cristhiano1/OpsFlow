@@ -1,6 +1,6 @@
 # ADR-002: Use SQL Server 2022 Developer in Docker for local development
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-003](ADR-003-sql-server-2025-vector-foundation.md) (2026-08-26)
 - **Date:** 2026-07-29
 
 ## Context

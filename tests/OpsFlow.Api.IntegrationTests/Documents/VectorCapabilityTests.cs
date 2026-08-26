@@ -148,7 +148,7 @@ public sealed class VectorCapabilityTests : IAsyncLifetime
             .FirstAsync();
 
         Assert.True(double.IsFinite(distance), $"Distance should be finite, got {distance}");
-        Assert.True(distance < 1e-6, $"Expected ~0 for identical vectors, got {distance}");
+        Assert.InRange(distance, -1e-6, 1e-6);
     }
 
     // ================================================================

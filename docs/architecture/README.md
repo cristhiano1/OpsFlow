@@ -59,11 +59,12 @@ the backend API yet.
 
 ## Local SQL Server boundary
 
-Local development uses Microsoft SQL Server 2022 (Developer edition) running in
+Local development uses Microsoft SQL Server 2025 (Developer edition) running in
 Docker, defined in `docker-compose.yml`. See
-[ADR-002](decisions/ADR-002-local-sql-server.md). The database is available for
-local development, but the API does not connect to it yet — there is no Entity
-Framework Core setup, no migrations and no data access in Phase 0.
+[ADR-003](decisions/ADR-003-sql-server-2025-vector-foundation.md). EF Core
+migrations and `OpsFlowDbContext` are configured, and the API uses the database
+for implemented persistence-backed features (authentication, projects,
+documents).
 
 ## Not present yet (planned for later phases)
 
@@ -73,7 +74,7 @@ The following are **not** implemented in Phase 0 and are intentionally absent:
   attachments, dashboard, audit, notifications).
 - Authentication and authorization.
 - Multi-organization (tenant) isolation.
-- Database access, EF Core and migrations.
+- Production database endpoints (controllers, queries, reads/writes via the API).
 - Background processing / messaging (outbox).
 - Email or file storage.
 - Any Azure or other cloud resources.
