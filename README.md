@@ -18,7 +18,7 @@ frontend, relational data modeling, testing, containerization and CI.
   At this stage the API is an empty shell (no controllers, no database access).
 - **Frontend** — React + TypeScript single-page application built with Vite.
   Currently a minimal application shell.
-- **Local infrastructure** — Microsoft SQL Server 2022 (Developer edition) in
+- **Local infrastructure** — Microsoft SQL Server 2025 (Developer edition) in
   Docker, used for local development only.
 
 The backend and frontend are not yet wired to each other or to the database;
@@ -77,8 +77,8 @@ docker compose up -d sqlserver
 ```
 
 The container publishes host port **14330** (see
-[ADR-002](docs/architecture/decisions/ADR-002-local-sql-server.md)) and stores
-data in the named volume `opsflow-sql-data`.
+[ADR-003](docs/architecture/decisions/ADR-003-sql-server-2025-vector-foundation.md)) and stores
+data in the named volume `opsflow-sql-data-2025`.
 
 ### 2. Backend
 

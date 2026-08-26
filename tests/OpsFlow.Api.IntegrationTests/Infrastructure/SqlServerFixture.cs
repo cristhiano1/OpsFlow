@@ -5,13 +5,13 @@ using Testcontainers.MsSql;
 namespace OpsFlow.Api.IntegrationTests.Infrastructure;
 
 /// <summary>
-/// Starts a disposable SQL Server 2022 container (Testcontainers), applies the
+/// Starts a disposable SQL Server 2025 container (Testcontainers), applies the
 /// real EF Core migrations once, and hands out contexts pointing at it.
 /// </summary>
 public sealed class SqlServerFixture : IAsyncLifetime
 {
     private readonly MsSqlContainer _container =
-        new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-latest").Build();
+        new MsSqlBuilder("mcr.microsoft.com/mssql/server:2025-latest").Build();
 
     public string ConnectionString { get; private set; } = string.Empty;
 

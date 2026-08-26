@@ -9,12 +9,12 @@ flowchart LR
     user([User])
     frontend["React Frontend<br/>(opsflow-web, Vite)"]
     api["ASP.NET Core API<br/>(OpsFlow.Api — shell only)"]
-    db[("SQL Server 2022<br/>(local Docker)")]
+    db[("SQL Server 2025<br/>(local Docker)")]
 
     user -->|uses in browser| frontend
 
     frontend -. planned: HTTP/JSON .-> api
-    api -. planned: EF Core / SQL .-> db
+    api -->|EF Core / SQL| db
 
     classDef planned stroke-dasharray: 5 5;
 ```
@@ -25,8 +25,8 @@ flowchart LR
   development; a user interacts with it in the browser.
 - **React frontend ⇢ ASP.NET Core API** (*planned*): the frontend does not call
   the API yet.
-- **ASP.NET Core API ⇢ SQL Server** (*planned*): the API has no database access
-  yet — no Entity Framework Core, no migrations, no queries.
+- **ASP.NET Core API → SQL Server**: the API uses EF Core and SQL Server for
+  implemented persistence-backed features (authentication, projects, documents).
 
 Azure, message queues, email, background workers and external integrations are
 intentionally excluded from Phase 0.
