@@ -66,19 +66,6 @@ migrations and `OpsFlowDbContext` are configured, and the API uses the database
 for implemented persistence-backed features (authentication, projects,
 documents).
 
-## Not present yet (planned for later phases)
-
-The following are **not** implemented in Phase 0 and are intentionally absent:
-
-- Domain modules (customers, work orders, assignments, comments, time tracking,
-  attachments, dashboard, audit, notifications).
-- Authentication and authorization.
-- Multi-organization (tenant) isolation.
-- Production database endpoints (controllers, queries, reads/writes via the API).
-- Background processing / messaging (outbox).
-- Email or file storage.
-- Any Azure or other cloud resources.
-
 ## Diagrams
 
 - [System context](diagrams/system-context.md)
