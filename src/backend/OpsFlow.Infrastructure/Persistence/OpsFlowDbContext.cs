@@ -32,6 +32,12 @@ public class OpsFlowDbContext : IdentityDbContext<ApplicationUser, IdentityRole<
     /// <summary>Document text extractions.</summary>
     public DbSet<DocumentExtraction> DocumentExtractions => Set<DocumentExtraction>();
 
+    /// <summary>Document chunk sets.</summary>
+    public DbSet<DocumentChunkSet> DocumentChunkSets => Set<DocumentChunkSet>();
+
+    /// <summary>Document chunks.</summary>
+    public DbSet<DocumentChunk> DocumentChunks => Set<DocumentChunk>();
+
     /// <summary>Refresh tokens.</summary>
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
 
