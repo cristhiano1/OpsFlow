@@ -39,6 +39,9 @@ builder.Services.AddSingleton<IDocumentTextExtractor, PlainTextExtractor>();
 builder.Services.AddSingleton<IDocumentTextExtractor, DocxTextExtractor>();
 builder.Services.AddScoped<ExtractDocumentTextService>();
 builder.Services.AddScoped<GetDocumentExtractionService>();
+builder.Services.AddSingleton<IDocumentChunker, DeterministicDocumentChunker>();
+builder.Services.AddScoped<IDocumentChunkSetRepository, EfDocumentChunkSetRepository>();
+builder.Services.AddScoped<EnsureDocumentChunksService>();
 
 var app = builder.Build();
 
