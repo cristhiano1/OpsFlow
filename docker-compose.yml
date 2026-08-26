@@ -2,8 +2,8 @@
 # OpsFlow — local development infrastructure (Phase 0)
 #
 # Phase 0 provides only the database engine required to develop against a real
-# SQL Server instance. Application, frontend, Mailpit and background services
-# are introduced in later phases.
+# SQL Server 2025 instance. Application, frontend, Mailpit and background
+# services are introduced in later phases.
 #
 # Usage (from the repository root):
 #   docker compose --env-file .env.example up -d sqlserver
@@ -15,7 +15,7 @@
 
 services:
   sqlserver:
-    image: mcr.microsoft.com/mssql/server:2022-latest
+    image: mcr.microsoft.com/mssql/server:2025-latest
     container_name: opsflow-sqlserver
     environment:
       ACCEPT_EULA: "Y"
@@ -24,9 +24,9 @@ services:
     ports:
       - "${MSSQL_PORT:-1433}:1433"
     volumes:
-      - opsflow-sql-data:/var/opt/mssql
+      - opsflow-sql-data-2025:/var/opt/mssql
     healthcheck:
-      # sqlcmd 18 ships in the 2022 image at /opt/mssql-tools18/bin.
+      # sqlcmd 18 ships in the 2025 image at /opt/mssql-tools18/bin.
       # The password is passed through the SQLCMDPASSWORD environment variable
       # rather than the -P flag, so it never appears in the container's process
       # list. $$ escapes the variable so Compose passes it literally and the
@@ -41,5 +41,5 @@ services:
       start_period: 30s
 
 volumes:
-  opsflow-sql-data:
-    name: opsflow-sql-data
+  opsflow-sql-data-2025:
+    name: opsflow-sql-data-2025
