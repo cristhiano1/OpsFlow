@@ -43,13 +43,18 @@ public sealed class DocumentEmbeddingIntegrationTests
         db.Documents.Add(new Document(documentId, orgId, projectId, "test.txt", "text/plain", 100, Timestamp));
         await db.SaveChangesAsync();
 
-        db.DocumentExtractions.Add(new DocumentExtraction(documentId, "Hello world", Timestamp));
+        var chunkTexts = Enumerable.Range(0, chunkCount).Select(i => $"chunk{i}").ToArray();
+        var extractionText = string.Concat(chunkTexts);
+        db.DocumentExtractions.Add(new DocumentExtraction(documentId, extractionText.Length > 0 ? extractionText : "empty", Timestamp));
         await db.SaveChangesAsync();
 
         db.DocumentChunkSets.Add(new DocumentChunkSet(documentId, 1, chunkCount, Timestamp));
+        var offset = 0;
         for (int i = 0; i < chunkCount; i++)
         {
-            db.DocumentChunks.Add(new DocumentChunk(Guid.NewGuid(), documentId, i, i * 5, (i + 1) * 5, $"chunk{i}"));
+            var text = chunkTexts[i];
+            db.DocumentChunks.Add(new DocumentChunk(Guid.NewGuid(), documentId, i, offset, offset + text.Length, text));
+            offset += text.Length;
         }
         await db.SaveChangesAsync();
 
@@ -1101,7 +1106,7 @@ public sealed class DocumentEmbeddingIntegrationTests
         seedDb.Documents.Add(new Document(documentId, orgId, projectId, "f.txt", "text/plain", 10, Timestamp));
         await seedDb.SaveChangesAsync();
 
-        seedDb.DocumentExtractions.Add(new DocumentExtraction(documentId, "text", Timestamp));
+        seedDb.DocumentExtractions.Add(new DocumentExtraction(documentId, "aabb", Timestamp));
         await seedDb.SaveChangesAsync();
 
         seedDb.DocumentChunkSets.Add(new DocumentChunkSet(documentId, 1, 1, Timestamp));
@@ -1171,11 +1176,11 @@ public sealed class DocumentEmbeddingIntegrationTests
         seedDb.Documents.Add(new Document(documentId, orgId, projectId, "f.txt", "text/plain", 10, Timestamp));
         await seedDb.SaveChangesAsync();
 
-        seedDb.DocumentExtractions.Add(new DocumentExtraction(documentId, "text", Timestamp));
+        seedDb.DocumentExtractions.Add(new DocumentExtraction(documentId, "orphan", Timestamp));
         await seedDb.SaveChangesAsync();
 
         seedDb.DocumentChunkSets.Add(new DocumentChunkSet(documentId, 1, 0, Timestamp));
-        seedDb.DocumentChunks.Add(new DocumentChunk(Guid.NewGuid(), documentId, 0, 0, 4, "orphan"));
+        seedDb.DocumentChunks.Add(new DocumentChunk(Guid.NewGuid(), documentId, 0, 0, 6, "orphan"));
         await seedDb.SaveChangesAsync();
 
         await using (var db = _fixture.CreateContext())
