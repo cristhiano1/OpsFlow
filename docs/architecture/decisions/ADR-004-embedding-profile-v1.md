@@ -32,14 +32,23 @@ The profile is defined as compile-time constants in
 `EmbeddingProfiles.SemanticV1Id` and `EmbeddingProfiles.SemanticV1Dimensions`.
 
 The `ModelId` is supplied by the `IEmbeddingGenerator` implementation at
-runtime and recorded in `DocumentEmbeddingSet.ModelId`. This allows swapping
-the concrete model without changing the profile identity, as long as the
-output dimensions remain 1536.
+runtime and recorded in `DocumentEmbeddingSet.ModelId` for audit and
+compatibility validation. A `ProfileId` identifies a compatible embedding
+vector space — not merely a dimension count. Within an existing profile,
+`ModelId` is immutable for compatibility purposes: an existing embedding set
+whose `ModelId` differs from the current generator's model is treated as an
+`InvariantConflict` (fail-closed). Changing the concrete embedding model
+requires a new `ProfileId`, even when the new model also produces
+1536-dimensional vectors, because equal dimensionality does not guarantee
+that vectors from different models are semantically comparable.
 
 The `EnsureDocumentEmbeddingsService` validates at the start of every
 invocation that the injected generator's `Identity.ProfileId` and
 `Identity.Dimensions` match the fixed profile. A mismatch is a configuration
-error and throws `InvalidOperationException`.
+error and throws `InvalidOperationException`. It also validates that any
+existing embedding set's `ModelId`, `Dimensions`, `ChunkingVersion`, and
+`EmbeddingCount` all match the current generator and source snapshot;
+any mismatch returns `InvariantConflict`.
 
 The database enforces `UNIQUE(DocumentId, ProfileId)` on
 `DocumentEmbeddingSets`, so each document can have at most one embedding set
