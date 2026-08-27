@@ -38,6 +38,9 @@ public class OpsFlowDbContext : IdentityDbContext<ApplicationUser, IdentityRole<
     /// <summary>Document chunks.</summary>
     public DbSet<DocumentChunk> DocumentChunks => Set<DocumentChunk>();
 
+    /// <summary>Document embedding sets.</summary>
+    public DbSet<DocumentEmbeddingSet> DocumentEmbeddingSets => Set<DocumentEmbeddingSet>();
+
     /// <summary>Refresh tokens.</summary>
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
 

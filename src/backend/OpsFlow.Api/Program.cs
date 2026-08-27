@@ -42,6 +42,8 @@ builder.Services.AddScoped<GetDocumentExtractionService>();
 builder.Services.AddSingleton<IDocumentChunker, DeterministicDocumentChunker>();
 builder.Services.AddScoped<IDocumentChunkSetRepository, EfDocumentChunkSetRepository>();
 builder.Services.AddScoped<EnsureDocumentChunksService>();
+builder.Services.AddScoped<IDocumentChunkSnapshotReader, EfDocumentChunkSnapshotReader>();
+builder.Services.AddScoped<IDocumentEmbeddingSetRepository, EfDocumentEmbeddingSetRepository>();
 
 var app = builder.Build();
 
