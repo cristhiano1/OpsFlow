@@ -10,6 +10,8 @@ using OpsFlow.Infrastructure.Configuration;
 using OpsFlow.Infrastructure.Identity;
 using OpsFlow.Infrastructure.Persistence;
 using OpsFlow.Infrastructure.Seeding;
+using OpsFlow.Application.Documents;
+using OpsFlow.Infrastructure.Documents;
 using OpsFlow.Infrastructure.Time;
 
 namespace OpsFlow.Infrastructure;
@@ -57,9 +59,19 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IClock, SystemClock>();
         services.AddScoped<DevelopmentDataSeeder>();
 
+        AddEmbeddingProvider(services, configuration);
         AddAuthenticationFoundation(services, configuration);
 
         return services;
+    }
+
+    // Internal so the infrastructure unit tests can exercise it without
+    // requiring a full DbContext + JWT composition.
+    internal static void AddEmbeddingProvider(IServiceCollection services, IConfiguration configuration)
+    {
+        services.AddOptions<OpenAIEmbeddingOptions>()
+            .Bind(configuration.GetSection(OpenAIEmbeddingOptions.SectionName));
+        services.AddSingleton<IEmbeddingGenerator, OpenAIEmbeddingGenerator>();
     }
 
     private static void AddAuthenticationFoundation(IServiceCollection services, IConfiguration configuration)

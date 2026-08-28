@@ -5,6 +5,7 @@
     <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" />
     <PackageReference Include="Microsoft.IdentityModel.Tokens" />
     <PackageReference Include="DocumentFormat.OpenXml" />
+    <PackageReference Include="OpenAI" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\OpsFlow.Application\OpsFlow.Application.csproj" />
