@@ -28,7 +28,12 @@ public sealed class EfLexicalChunkRetriever : ILexicalChunkRetriever
         int topK,
         CancellationToken cancellationToken)
     {
-        return await _db.Database
+        // Materialize the ordered rows first. Composing LINQ (e.g. a Select
+        // projection) over a raw SQL query wraps it in an outer query with no
+        // ORDER BY, which lets SQL Server return rows in an arbitrary order and
+        // discards the inner rank ordering. Materializing here keeps the raw
+        // SQL's ORDER BY authoritative; the projection below only maps, never sorts.
+        var rows = await _db.Database
             .SqlQuery<LexicalChunkHitRow>($"""
                 SELECT
                     c.[DocumentId],
@@ -46,16 +51,16 @@ public sealed class EfLexicalChunkRetriever : ILexicalChunkRetriever
                 ORDER BY ft.[RANK] DESC, c.[DocumentId] ASC, c.[ChunkIndex] ASC
                 OFFSET 0 ROWS FETCH NEXT {topK} ROWS ONLY
                 """)
-            .Select(r => new LexicalChunkHit(
-                r.DocumentId,
-                r.DocumentChunkId,
-                r.ChunkIndex,
-                r.StartOffset,
-                r.EndOffset,
-                r.Text,
-                r.FtsRank))
-            .AsNoTracking()
             .ToListAsync(cancellationToken);
+
+        return [.. rows.Select(row => new LexicalChunkHit(
+            row.DocumentId,
+            row.DocumentChunkId,
+            row.ChunkIndex,
+            row.StartOffset,
+            row.EndOffset,
+            row.Text,
+            row.FtsRank))];
     }
 
     internal sealed class LexicalChunkHitRow
