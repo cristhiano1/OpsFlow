@@ -16,7 +16,6 @@ namespace OpsFlow.Infrastructure.Documents;
 /// </summary>
 public sealed partial class OpenAIEmbeddingGenerator : IEmbeddingGenerator
 {
-    private const string ModelId = "text-embedding-3-small";
     private const int BatchSize = 60;
 
     private readonly EmbeddingClient? _client;
@@ -25,7 +24,7 @@ public sealed partial class OpenAIEmbeddingGenerator : IEmbeddingGenerator
     /// <inheritdoc />
     public EmbeddingGeneratorIdentity Identity { get; } = new(
         EmbeddingProfiles.SemanticV1Id,
-        ModelId,
+        EmbeddingProfiles.SemanticV1ModelId,
         EmbeddingProfiles.SemanticV1Dimensions);
 
     /// <summary>Production constructor — creates the SDK client when an API key is configured.</summary>
@@ -45,7 +44,7 @@ public sealed partial class OpenAIEmbeddingGenerator : IEmbeddingGenerator
             {
                 NetworkTimeout = TimeSpan.FromSeconds(60),
             };
-            _client = new EmbeddingClient(ModelId, new ApiKeyCredential(apiKey), clientOptions);
+            _client = new EmbeddingClient(EmbeddingProfiles.SemanticV1ModelId, new ApiKeyCredential(apiKey), clientOptions);
         }
     }
 
@@ -81,7 +80,7 @@ public sealed partial class OpenAIEmbeddingGenerator : IEmbeddingGenerator
 
         int batchCount = (texts.Count + BatchSize - 1) / BatchSize;
 
-        LogGenerationStarted(ModelId, texts.Count, batchCount);
+        LogGenerationStarted(EmbeddingProfiles.SemanticV1ModelId, texts.Count, batchCount);
 
         var stopwatch = Stopwatch.StartNew();
         var results = new List<ReadOnlyMemory<float>>(texts.Count);
@@ -145,7 +144,7 @@ public sealed partial class OpenAIEmbeddingGenerator : IEmbeddingGenerator
 
             stopwatch.Stop();
 
-            LogGenerationCompleted(ModelId, texts.Count, batchCount, stopwatch.ElapsedMilliseconds);
+            LogGenerationCompleted(EmbeddingProfiles.SemanticV1ModelId, texts.Count, batchCount, stopwatch.ElapsedMilliseconds);
 
             return results;
         }
@@ -159,10 +158,10 @@ public sealed partial class OpenAIEmbeddingGenerator : IEmbeddingGenerator
         }
         catch (Exception ex)
         {
-            LogGenerationFailed(ex, ModelId, texts.Count);
+            LogGenerationFailed(ex, EmbeddingProfiles.SemanticV1ModelId, texts.Count);
 
             throw new EmbeddingGenerationException(
-                $"Embedding generation failed for {texts.Count} inputs using model '{ModelId}'.", ex);
+                $"Embedding generation failed for {texts.Count} inputs using model '{EmbeddingProfiles.SemanticV1ModelId}'.", ex);
         }
     }
 

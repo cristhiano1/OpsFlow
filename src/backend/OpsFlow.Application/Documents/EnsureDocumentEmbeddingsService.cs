@@ -144,6 +144,13 @@ public sealed class EnsureDocumentEmbeddingsService
                 $"'{EmbeddingProfiles.SemanticV1Id}'.");
         }
 
+        if (identity.ModelId != EmbeddingProfiles.SemanticV1ModelId)
+        {
+            throw new InvalidOperationException(
+                $"Generator model '{identity.ModelId}' is not the supported model " +
+                $"'{EmbeddingProfiles.SemanticV1ModelId}'.");
+        }
+
         if (identity.Dimensions != EmbeddingProfiles.SemanticV1Dimensions)
         {
             throw new InvalidOperationException(
@@ -224,6 +231,7 @@ public sealed class EnsureDocumentEmbeddingsService
             }
 
             var span = vector.Span;
+            bool anyNonZero = false;
             for (int j = 0; j < span.Length; j++)
             {
                 if (!float.IsFinite(span[j]))
@@ -231,6 +239,17 @@ public sealed class EnsureDocumentEmbeddingsService
                     throw new InvalidOperationException(
                         $"Vector at index {i} contains non-finite value {span[j]} at component {j}.");
                 }
+
+                if (span[j] != 0f)
+                {
+                    anyNonZero = true;
+                }
+            }
+
+            if (!anyNonZero)
+            {
+                throw new InvalidOperationException(
+                    $"Vector at index {i} has zero norm and cannot be used for cosine distance.");
             }
         }
     }

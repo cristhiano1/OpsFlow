@@ -20,9 +20,9 @@ public sealed class EnsureDocumentEmbeddingsServiceTests
                 .Select(i => new DocumentChunkSource(Guid.NewGuid(), i, $"Chunk text {i}"))]);
 
     private static DocumentEmbeddingSet MakeExistingEmbeddingSet(
-        string profileId = "opsflow-semantic-v1",
-        string modelId = "text-embedding-3-small",
-        int dimensions = 1536,
+        string profileId = EmbeddingProfiles.SemanticV1Id,
+        string modelId = EmbeddingProfiles.SemanticV1ModelId,
+        int dimensions = EmbeddingProfiles.SemanticV1Dimensions,
         int chunkingVersion = 1,
         int embeddingCount = 3) =>
         new(Guid.NewGuid(), DocumentId, chunkingVersion, profileId, modelId, dimensions, embeddingCount, Now);
@@ -167,10 +167,26 @@ public sealed class EnsureDocumentEmbeddingsServiceTests
     {
         var (service, _, _, _, generator, _) = CreateService(MakeDocument());
         generator.Identity = new EmbeddingGeneratorIdentity(
-            "wrong-profile", "model", EmbeddingProfiles.SemanticV1Dimensions);
+            "wrong-profile", EmbeddingProfiles.SemanticV1ModelId, EmbeddingProfiles.SemanticV1Dimensions);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => service.EnsureAsync(MakeCommand(), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task EnsureAsync_throws_for_wrong_model_id()
+    {
+        var (service, documents, snapshotReader, embeddingSets, generator, _) = CreateService(MakeDocument());
+        generator.Identity = new EmbeddingGeneratorIdentity(
+            EmbeddingProfiles.SemanticV1Id, "different-model", EmbeddingProfiles.SemanticV1Dimensions);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.EnsureAsync(MakeCommand(), CancellationToken.None));
+
+        Assert.False(generator.GenerateCalled);
+        Assert.Null(documents.ReceivedGetDocumentId);
+        Assert.False(snapshotReader.GetByDocumentCalled);
+        Assert.False(embeddingSets.GetByDocumentAndProfileCalled);
     }
 
     [Fact]
@@ -178,7 +194,7 @@ public sealed class EnsureDocumentEmbeddingsServiceTests
     {
         var (service, _, _, _, generator, _) = CreateService(MakeDocument());
         generator.Identity = new EmbeddingGeneratorIdentity(
-            EmbeddingProfiles.SemanticV1Id, "model", 768);
+            EmbeddingProfiles.SemanticV1Id, EmbeddingProfiles.SemanticV1ModelId, 768);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => service.EnsureAsync(MakeCommand(), CancellationToken.None));
@@ -360,7 +376,7 @@ public sealed class EnsureDocumentEmbeddingsServiceTests
         var addedSet = embeddingSets.LastAddedEmbeddingSet!;
         Assert.Equal(DocumentId, addedSet.DocumentId);
         Assert.Equal(EmbeddingProfiles.SemanticV1Id, addedSet.ProfileId);
-        Assert.Equal("text-embedding-3-small", addedSet.ModelId);
+        Assert.Equal(EmbeddingProfiles.SemanticV1ModelId, addedSet.ModelId);
         Assert.Equal(EmbeddingProfiles.SemanticV1Dimensions, addedSet.Dimensions);
         Assert.Equal(2, addedSet.EmbeddingCount);
         Assert.Equal(Now, addedSet.CreatedAt);
@@ -477,6 +493,23 @@ public sealed class EnsureDocumentEmbeddingsServiceTests
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => service.EnsureAsync(MakeCommand(), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task EnsureAsync_throws_when_generator_returns_zero_norm_vector()
+    {
+        var (service, _, snapshotReader, embeddingSets, generator, _) = CreateService(MakeDocument());
+        snapshotReader.GetByDocumentResult = MakeSnapshot(2);
+        var validVector = new float[EmbeddingProfiles.SemanticV1Dimensions];
+        validVector[0] = 1.0f;
+        var zeroVector = new float[EmbeddingProfiles.SemanticV1Dimensions];
+        generator.GenerateResult = [validVector, zeroVector];
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.EnsureAsync(MakeCommand(), CancellationToken.None));
+
+        Assert.True(generator.GenerateCalled);
+        Assert.False(embeddingSets.AddIfAbsentCalled);
     }
 
     // ================================================================

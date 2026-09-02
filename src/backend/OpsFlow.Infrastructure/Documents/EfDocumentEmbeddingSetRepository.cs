@@ -98,6 +98,7 @@ public sealed class EfDocumentEmbeddingSetRepository : IDocumentEmbeddingSetRepo
                 }
 
                 var span = input.Vector.Span;
+                bool anyNonZero = false;
                 for (int i = 0; i < span.Length; i++)
                 {
                     if (!float.IsFinite(span[i]))
@@ -105,6 +106,18 @@ public sealed class EfDocumentEmbeddingSetRepository : IDocumentEmbeddingSetRepo
                         throw new ArgumentException(
                             $"Vector contains non-finite value at index {i}.", nameof(embeddings));
                     }
+
+                    if (span[i] != 0f)
+                    {
+                        anyNonZero = true;
+                    }
+                }
+
+                if (!anyNonZero)
+                {
+                    throw new ArgumentException(
+                        $"Vector for chunk {input.DocumentChunkId} has zero norm and cannot be used for cosine distance.",
+                        nameof(embeddings));
                 }
             }
         }

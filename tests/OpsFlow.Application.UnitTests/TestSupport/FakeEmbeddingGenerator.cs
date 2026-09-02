@@ -5,7 +5,7 @@ namespace OpsFlow.Application.UnitTests.TestSupport;
 internal sealed class FakeEmbeddingGenerator : IEmbeddingGenerator
 {
     public EmbeddingGeneratorIdentity Identity { get; set; } =
-        new(EmbeddingProfiles.SemanticV1Id, "text-embedding-3-small", EmbeddingProfiles.SemanticV1Dimensions);
+        new(EmbeddingProfiles.SemanticV1Id, EmbeddingProfiles.SemanticV1ModelId, EmbeddingProfiles.SemanticV1Dimensions);
 
     public IReadOnlyList<ReadOnlyMemory<float>>? GenerateResult { get; set; }
     public bool GenerateCalled { get; private set; }
@@ -24,7 +24,12 @@ internal sealed class FakeEmbeddingGenerator : IEmbeddingGenerator
         }
 
         IReadOnlyList<ReadOnlyMemory<float>> defaultResult =
-            [.. texts.Select(_ => (ReadOnlyMemory<float>)new float[Identity.Dimensions])];
+            [.. texts.Select(_ =>
+            {
+                var v = new float[Identity.Dimensions];
+                v[0] = 1.0f;
+                return (ReadOnlyMemory<float>)v;
+            })];
 
         return Task.FromResult(defaultResult);
     }
