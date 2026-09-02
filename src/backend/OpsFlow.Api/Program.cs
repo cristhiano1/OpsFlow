@@ -47,6 +47,8 @@ builder.Services.AddScoped<IDocumentEmbeddingSetRepository, EfDocumentEmbeddingS
 builder.Services.AddScoped<EnsureDocumentEmbeddingsService>();
 builder.Services.AddScoped<ISemanticChunkRetriever, EfSemanticChunkRetriever>();
 builder.Services.AddScoped<SearchDocumentChunksService>();
+builder.Services.AddScoped<ILexicalChunkRetriever, EfLexicalChunkRetriever>();
+builder.Services.AddScoped<SearchDocumentChunksLexicallyService>();
 
 var app = builder.Build();
 
