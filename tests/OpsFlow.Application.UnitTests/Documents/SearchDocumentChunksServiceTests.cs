@@ -365,6 +365,21 @@ public sealed class SearchDocumentChunksServiceTests
             service.SearchAsync(query, CancellationToken.None));
     }
 
+    [Fact]
+    public async Task Search_rejects_generator_returning_zero_norm_vector()
+    {
+        var (service, projects, generator, retriever) = CreateService();
+        projects.ExistsResult = true;
+        generator.GenerateResult = [new float[EmbeddingProfiles.SemanticV1Dimensions]];
+
+        var query = MakeQuery();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.SearchAsync(query, CancellationToken.None));
+
+        Assert.False(retriever.RetrieveCalled);
+    }
+
     // ================================================================
     // Exception propagation
     // ================================================================

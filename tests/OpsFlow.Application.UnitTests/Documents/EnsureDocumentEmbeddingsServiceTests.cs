@@ -495,6 +495,23 @@ public sealed class EnsureDocumentEmbeddingsServiceTests
             () => service.EnsureAsync(MakeCommand(), CancellationToken.None));
     }
 
+    [Fact]
+    public async Task EnsureAsync_throws_when_generator_returns_zero_norm_vector()
+    {
+        var (service, _, snapshotReader, embeddingSets, generator, _) = CreateService(MakeDocument());
+        snapshotReader.GetByDocumentResult = MakeSnapshot(2);
+        var validVector = new float[EmbeddingProfiles.SemanticV1Dimensions];
+        validVector[0] = 1.0f;
+        var zeroVector = new float[EmbeddingProfiles.SemanticV1Dimensions];
+        generator.GenerateResult = [validVector, zeroVector];
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.EnsureAsync(MakeCommand(), CancellationToken.None));
+
+        Assert.True(generator.GenerateCalled);
+        Assert.False(embeddingSets.AddIfAbsentCalled);
+    }
+
     // ================================================================
     // Repository AddIfAbsent returns NotFound (tenant mismatch)
     // ================================================================

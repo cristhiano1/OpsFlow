@@ -137,6 +137,7 @@ public sealed class SearchDocumentChunksService
         }
 
         var span = vector.Span;
+        bool anyNonZero = false;
         for (int i = 0; i < span.Length; i++)
         {
             if (!float.IsFinite(span[i]))
@@ -144,6 +145,17 @@ public sealed class SearchDocumentChunksService
                 throw new InvalidOperationException(
                     $"Query vector contains non-finite value {span[i]} at component {i}.");
             }
+
+            if (span[i] != 0f)
+            {
+                anyNonZero = true;
+            }
+        }
+
+        if (!anyNonZero)
+        {
+            throw new InvalidOperationException(
+                "Query vector has zero norm and cannot be used for cosine distance retrieval.");
         }
     }
 }

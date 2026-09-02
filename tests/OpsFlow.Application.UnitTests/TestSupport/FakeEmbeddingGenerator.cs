@@ -24,7 +24,12 @@ internal sealed class FakeEmbeddingGenerator : IEmbeddingGenerator
         }
 
         IReadOnlyList<ReadOnlyMemory<float>> defaultResult =
-            [.. texts.Select(_ => (ReadOnlyMemory<float>)new float[Identity.Dimensions])];
+            [.. texts.Select(_ =>
+            {
+                var v = new float[Identity.Dimensions];
+                v[0] = 1.0f;
+                return (ReadOnlyMemory<float>)v;
+            })];
 
         return Task.FromResult(defaultResult);
     }
