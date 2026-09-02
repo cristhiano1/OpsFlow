@@ -144,6 +144,13 @@ public sealed class EnsureDocumentEmbeddingsService
                 $"'{EmbeddingProfiles.SemanticV1Id}'.");
         }
 
+        if (identity.ModelId != EmbeddingProfiles.SemanticV1ModelId)
+        {
+            throw new InvalidOperationException(
+                $"Generator model '{identity.ModelId}' is not the supported model " +
+                $"'{EmbeddingProfiles.SemanticV1ModelId}'.");
+        }
+
         if (identity.Dimensions != EmbeddingProfiles.SemanticV1Dimensions)
         {
             throw new InvalidOperationException(
