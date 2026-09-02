@@ -44,20 +44,21 @@ public sealed class SemanticChunkRetrievalIntegrationTests
         string profileId = EmbeddingProfiles.SemanticV1Id,
         string modelId = EmbeddingProfiles.SemanticV1ModelId,
         int dimensions = EmbeddingProfiles.SemanticV1Dimensions,
-        Func<int, float[]>? vectorFactory = null)
+        Func<int, float[]>? vectorFactory = null,
+        Guid? documentId = null)
     {
         await using var db = _fixture.CreateContext();
 
-        var documentId = Guid.NewGuid();
-        db.Documents.Add(new Document(documentId, orgId, projectId, "test.txt", "text/plain", 100, Timestamp));
+        var docId = documentId ?? Guid.NewGuid();
+        db.Documents.Add(new Document(docId, orgId, projectId, "test.txt", "text/plain", 100, Timestamp));
         await db.SaveChangesAsync();
 
         var chunkTexts = Enumerable.Range(0, chunkCount).Select(i => $"chunk{i}").ToArray();
         var extractionText = chunkCount > 0 ? string.Concat(chunkTexts) : "empty";
-        db.DocumentExtractions.Add(new DocumentExtraction(documentId, extractionText, Timestamp));
+        db.DocumentExtractions.Add(new DocumentExtraction(docId, extractionText, Timestamp));
         await db.SaveChangesAsync();
 
-        db.DocumentChunkSets.Add(new DocumentChunkSet(documentId, 1, chunkCount, Timestamp));
+        db.DocumentChunkSets.Add(new DocumentChunkSet(docId, 1, chunkCount, Timestamp));
         var chunkIds = new List<Guid>();
         var offset = 0;
         for (int i = 0; i < chunkCount; i++)
@@ -65,14 +66,14 @@ public sealed class SemanticChunkRetrievalIntegrationTests
             var text = chunkTexts[i];
             var chunkId = Guid.NewGuid();
             chunkIds.Add(chunkId);
-            db.DocumentChunks.Add(new DocumentChunk(chunkId, documentId, i, offset, offset + text.Length, text));
+            db.DocumentChunks.Add(new DocumentChunk(chunkId, docId, i, offset, offset + text.Length, text));
             offset += text.Length;
         }
         await db.SaveChangesAsync();
 
         var setId = Guid.NewGuid();
         var embeddingSet = new DocumentEmbeddingSet(
-            setId, documentId, 1, profileId, modelId, dimensions, chunkCount, Timestamp);
+            setId, docId, 1, profileId, modelId, dimensions, chunkCount, Timestamp);
         db.DocumentEmbeddingSets.Add(embeddingSet);
 
         for (int i = 0; i < chunkCount; i++)
@@ -87,7 +88,7 @@ public sealed class SemanticChunkRetrievalIntegrationTests
         }
         await db.SaveChangesAsync();
 
-        return new SeedResult(documentId, chunkIds, setId);
+        return new SeedResult(docId, chunkIds, setId);
     }
 
     private async Task<(Guid OrgId, Guid ProjectId)> SeedTenantAsync()
@@ -304,30 +305,33 @@ public sealed class SemanticChunkRetrievalIntegrationTests
     {
         var (orgId, projectId) = await SeedTenantAsync();
 
+        // SQL Server sorts uniqueidentifier by the last 6 bytes first, so
+        // ...0010 < ...0020 in ASC order. Seed the higher-ID document first
+        // to prove ordering comes from SQL Server, not insertion order.
+        var sqlLowerId = new Guid("00000000-0000-0000-0000-000000000010");
+        var sqlHigherId = new Guid("00000000-0000-0000-0000-000000000020");
+
         var sameVec = MakeDirectionVector((0, 0.5f), (1, 0.5f));
         await SeedDocumentWithEmbeddingsAsync(orgId, projectId, chunkCount: 2,
-            vectorFactory: _ => sameVec);
+            vectorFactory: _ => sameVec, documentId: sqlHigherId);
         await SeedDocumentWithEmbeddingsAsync(orgId, projectId, chunkCount: 2,
-            vectorFactory: _ => sameVec);
+            vectorFactory: _ => sameVec, documentId: sqlLowerId);
 
         var hits = await RetrieveAsync(orgId, projectId, MakeDirectionVector((0, 0.5f), (1, 0.5f)));
 
         Assert.Equal(4, hits.Count);
 
-        for (int i = 0; i < hits.Count - 1; i++)
-        {
-            var curr = hits[i];
-            var next = hits[i + 1];
+        var firstDistance = hits[0].CosineDistance;
+        Assert.All(hits, h => Assert.Equal(firstDistance, h.CosineDistance, precision: 9));
 
-            Assert.True(
-                curr.CosineDistance < next.CosineDistance
-                || (Math.Abs(curr.CosineDistance - next.CosineDistance) < 1e-9
-                    && (curr.DocumentId.CompareTo(next.DocumentId) < 0
-                        || (curr.DocumentId == next.DocumentId && curr.ChunkIndex <= next.ChunkIndex))),
-                $"Hit {i} not ordered before hit {i + 1}: " +
-                $"d={curr.CosineDistance}, doc={curr.DocumentId}, idx={curr.ChunkIndex} vs " +
-                $"d={next.CosineDistance}, doc={next.DocumentId}, idx={next.ChunkIndex}");
-        }
+        Assert.Equal(sqlLowerId, hits[0].DocumentId);
+        Assert.Equal(0, hits[0].ChunkIndex);
+        Assert.Equal(sqlLowerId, hits[1].DocumentId);
+        Assert.Equal(1, hits[1].ChunkIndex);
+        Assert.Equal(sqlHigherId, hits[2].DocumentId);
+        Assert.Equal(0, hits[2].ChunkIndex);
+        Assert.Equal(sqlHigherId, hits[3].DocumentId);
+        Assert.Equal(1, hits[3].ChunkIndex);
     }
 
     // ================================================================
