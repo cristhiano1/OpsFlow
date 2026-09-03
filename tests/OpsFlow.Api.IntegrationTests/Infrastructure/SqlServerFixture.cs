@@ -17,7 +17,10 @@ public sealed class SqlServerFixture : IAsyncLifetime
     private const string DatabaseName = "OpsFlowTest";
 
     private static readonly IFutureDockerImage FtsImage = new ImageFromDockerfileBuilder()
-        .WithDockerfileDirectory(CommonDirectoryPath.GetSolutionDirectory(), "docker/sqlserver-fts")
+        .WithDockerfileDirectory(
+            CommonDirectoryPath.GetSolutionDirectory(
+                typeof(SqlServerFixture).Assembly.Location),
+            "docker/sqlserver-fts")
         .WithDockerfile("Dockerfile")
         .Build();
 
