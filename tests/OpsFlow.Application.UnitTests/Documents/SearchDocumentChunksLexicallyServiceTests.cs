@@ -179,6 +179,24 @@ public sealed class SearchDocumentChunksLexicallyServiceTests
     }
 
     // ================================================================
+    // Supplementary-plane Unicode validation
+    // ================================================================
+
+    [Fact]
+    public async Task Search_accepts_supplementary_plane_unicode_letter()
+    {
+        var (service, projects, _) = CreateService();
+        projects.ExistsResult = true;
+
+        var supplementaryLetter = char.ConvertFromUtf32(0x10400); // DESERET CAPITAL LETTER LONG I
+        var query = MakeQuery(queryText: supplementaryLetter);
+
+        var result = await service.SearchAsync(query, CancellationToken.None);
+
+        Assert.True(result.ProjectFound);
+    }
+
+    // ================================================================
     // TopK validation
     // ================================================================
 

@@ -1,3 +1,4 @@
+using System.Text;
 using OpsFlow.Application.Projects;
 
 namespace OpsFlow.Application.Documents;
@@ -59,7 +60,7 @@ public sealed class SearchDocumentChunksLexicallyService
                 nameof(query));
         }
 
-        if (!query.QueryText.Any(char.IsLetterOrDigit))
+        if (!query.QueryText.EnumerateRunes().Any(Rune.IsLetterOrDigit))
         {
             throw new ArgumentException(
                 "Query text must contain at least one letter or digit.",
