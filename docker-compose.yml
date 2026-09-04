@@ -15,7 +15,9 @@
 
 services:
   sqlserver:
-    image: mcr.microsoft.com/mssql/server:2025-latest
+    build:
+      context: docker/sqlserver-fts
+      dockerfile: Dockerfile
     container_name: opsflow-sqlserver
     environment:
       ACCEPT_EULA: "Y"
