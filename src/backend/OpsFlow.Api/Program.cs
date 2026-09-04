@@ -49,6 +49,7 @@ builder.Services.AddScoped<ISemanticChunkRetriever, EfSemanticChunkRetriever>();
 builder.Services.AddScoped<SearchDocumentChunksService>();
 builder.Services.AddScoped<ILexicalChunkRetriever, EfLexicalChunkRetriever>();
 builder.Services.AddScoped<SearchDocumentChunksLexicallyService>();
+builder.Services.AddScoped<SearchDocumentChunksHybridService>();
 
 var app = builder.Build();
 
