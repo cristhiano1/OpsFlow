@@ -711,6 +711,74 @@ public sealed class AnswerProjectQuestionServiceTests
     }
 
     // ================================================================
+    // Answer text: reserved inline citation markers (fail closed)
+    // ================================================================
+
+    [Fact]
+    public async Task Answer_rejects_inline_bracket_marker_in_answer_text()
+    {
+        var (service, projects, _, semantic, _, answerGen) = CreateService();
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit()];
+        answerGen.Output = Answered("See [1]", 1);
+
+        await Assert.ThrowsAsync<GroundedAnswerValidationException>(() =>
+            service.AnswerAsync(MakeQuery(), CancellationToken.None));
+
+        // Fail-closed: the answer is rejected outright, never repaired, and the
+        // generator is invoked exactly once (no retry / second channel).
+        Assert.Equal(1, answerGen.CallCount);
+    }
+
+    [Fact]
+    public async Task Answer_rejects_footnote_marker_in_answer_text()
+    {
+        var (service, projects, _, semantic, _, answerGen) = CreateService();
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit()];
+        answerGen.Output = Answered("See details[^1].", 1);
+
+        await Assert.ThrowsAsync<GroundedAnswerValidationException>(() =>
+            service.AnswerAsync(MakeQuery(), CancellationToken.None));
+        Assert.Equal(1, answerGen.CallCount);
+    }
+
+    [Fact]
+    public async Task Answer_rejects_multi_id_bracket_marker_in_answer_text()
+    {
+        var (service, projects, _, semantic, _, answerGen) = CreateService();
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit(text: "one"), MakeHit(text: "two")];
+        answerGen.Output = Answered("Supported by [1, 2].", 1, 2);
+
+        await Assert.ThrowsAsync<GroundedAnswerValidationException>(() =>
+            service.AnswerAsync(MakeQuery(), CancellationToken.None));
+        Assert.Equal(1, answerGen.CallCount);
+    }
+
+    [Fact]
+    public async Task Answer_allows_bracketed_number_outside_evidence_range()
+    {
+        // A bracketed number that cannot refer to a supplied evidence id (only
+        // ids 1..N exist) is ordinary content, not a reserved marker. This guards
+        // against the year/version false positives that broad bracket-banning
+        // would cause.
+        var (service, projects, _, semantic, _, answerGen) = CreateService();
+        projects.ExistsResult = true;
+        var hit = new SemanticChunkHit(Guid.NewGuid(), Guid.NewGuid(), 0, 0, 5, "hello", 0.1);
+        semantic.RetrieveResult = [hit];
+        answerGen.Output = Answered("The policy was revised in [2026].", 1);
+
+        var result = await service.AnswerAsync(MakeQuery(), CancellationToken.None);
+
+        Assert.Equal(AnswerProjectQuestionStatus.Success, result.Status);
+        Assert.Equal("The policy was revised in [2026].", result.Answer!.Text);
+        var citation = Assert.Single(result.Answer.Citations);
+        Assert.Equal(1, citation.CitationNumber);
+        Assert.Equal(hit.DocumentChunkId, citation.DocumentChunkId);
+    }
+
+    // ================================================================
     // Insufficient-evidence contract
     // ================================================================
 

@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Security;
+using System.Text.RegularExpressions;
 
 namespace OpsFlow.Application.Documents;
 
@@ -10,7 +12,7 @@ namespace OpsFlow.Application.Documents;
 /// ever supplies temporary integer labels; it can never author authoritative
 /// citation metadata.
 /// </summary>
-public sealed class AnswerProjectQuestionService
+public sealed partial class AnswerProjectQuestionService
 {
     /// <summary>Fixed number of fused evidence chunks requested from hybrid retrieval.</summary>
     private const int EvidenceTopK = 8;
@@ -228,6 +230,17 @@ public sealed class AnswerProjectQuestionService
                 $"Generated answer length ({output.Answer.Length}) exceeds maximum ({MaxAnswerChars}).");
         }
 
+        if (ContainsReservedInlineCitationMarker(output.Answer, selectedEvidence.Count))
+        {
+            // The model was told the citations array is the only citation channel.
+            // An inline marker such as "[1]" or "[^1]" referring to a supplied
+            // temporary evidence id would create a second, unverified citation
+            // channel, so reject fail-closed rather than publish it.
+            throw new GroundedAnswerValidationException(
+                "Generator returned answer text containing a reserved inline evidence citation marker; " +
+                "the citations array is the only citation channel.");
+        }
+
         if (output.CitationNumbers.Count == 0)
         {
             throw new GroundedAnswerValidationException(
@@ -274,4 +287,36 @@ public sealed class AnswerProjectQuestionService
 
         return AnswerProjectQuestionResult.Success(new GroundedAnswer(output.Answer, citations));
     }
+
+    // Rejection-only validator: detects citation-shaped bracket tokens in the
+    // answer text that could refer to a supplied temporary evidence id
+    // (1..evidenceCount). It never extracts or maps citations — the structured
+    // CitationNumbers array remains the sole source of provenance. Bracketed
+    // numbers outside the evidence range (for example "[2026]") are ordinary
+    // content and are left alone, avoiding the year/version false positives that
+    // broad free-text citation parsing would cause.
+    private static bool ContainsReservedInlineCitationMarker(string answer, int evidenceCount)
+    {
+        foreach (Match bracket in InlineCitationMarkerRegex().Matches(answer))
+        {
+            foreach (Match digits in CitationDigitsRegex().Matches(bracket.Value))
+            {
+                if (int.TryParse(digits.Value, NumberStyles.None, CultureInfo.InvariantCulture, out var id)
+                    && id >= 1
+                    && id <= evidenceCount)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    // A citation-shaped bracket token: [1], [^1], [1,2], [ 1, 2 ].
+    [GeneratedRegex(@"\[\s*\^?\s*[0-9]+(?:\s*,\s*\^?\s*[0-9]+)*\s*\]", RegexOptions.CultureInvariant)]
+    private static partial Regex InlineCitationMarkerRegex();
+
+    [GeneratedRegex("[0-9]+", RegexOptions.CultureInvariant)]
+    private static partial Regex CitationDigitsRegex();
 }
