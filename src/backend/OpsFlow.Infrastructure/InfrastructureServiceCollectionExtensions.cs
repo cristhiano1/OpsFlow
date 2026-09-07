@@ -60,6 +60,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<DevelopmentDataSeeder>();
 
         AddEmbeddingProvider(services, configuration);
+        AddAnswerGenerationProvider(services, configuration);
         AddAuthenticationFoundation(services, configuration);
 
         return services;
@@ -72,6 +73,16 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddOptions<OpenAIEmbeddingOptions>()
             .Bind(configuration.GetSection(OpenAIEmbeddingOptions.SectionName));
         services.AddSingleton<IEmbeddingGenerator, OpenAIEmbeddingGenerator>();
+    }
+
+    // Internal so the infrastructure unit tests can exercise it without
+    // requiring a full DbContext + JWT composition. Binds the shared "OpenAI"
+    // section (reusing the embedding provider's ApiKey plus AnswerModel).
+    internal static void AddAnswerGenerationProvider(IServiceCollection services, IConfiguration configuration)
+    {
+        services.AddOptions<OpenAIAnswerGenerationOptions>()
+            .Bind(configuration.GetSection(OpenAIAnswerGenerationOptions.SectionName));
+        services.AddSingleton<IGroundedAnswerGenerator, OpenAiGroundedAnswerGenerator>();
     }
 
     private static void AddAuthenticationFoundation(IServiceCollection services, IConfiguration configuration)

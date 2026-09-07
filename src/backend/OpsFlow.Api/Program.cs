@@ -50,6 +50,7 @@ builder.Services.AddScoped<SearchDocumentChunksService>();
 builder.Services.AddScoped<ILexicalChunkRetriever, EfLexicalChunkRetriever>();
 builder.Services.AddScoped<SearchDocumentChunksLexicallyService>();
 builder.Services.AddScoped<SearchDocumentChunksHybridService>();
+builder.Services.AddScoped<AnswerProjectQuestionService>();
 
 var app = builder.Build();
 
