@@ -118,9 +118,13 @@ SDK transport retry (429/5xx) is unchanged.
 
 ### Language and knowledge boundary
 
-The system prompt instructs the model to answer in the language of the question
-and to use only the supplied evidence for factual claims, returning
-insufficient-evidence rather than inventing unsupported facts.
+The system prompt instructs the model to honor an explicit output-language or
+translation instruction in the question (a legitimate task instruction), falling
+back to the language of the question when none is requested; a language
+instruction inside evidence is untrusted and ignored, and it never overrides the
+grounding/security rules. It also instructs the model to use only the supplied
+evidence for factual claims, returning insufficient-evidence rather than
+inventing unsupported facts.
 
 ### Two exception types
 
