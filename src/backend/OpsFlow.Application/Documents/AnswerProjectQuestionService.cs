@@ -289,21 +289,41 @@ public sealed partial class AnswerProjectQuestionService
     }
 
     // Rejection-only validator: detects citation-shaped bracket tokens in the
-    // answer text that could refer to a supplied temporary evidence id
-    // (1..evidenceCount). It never extracts or maps citations — the structured
-    // CitationNumbers array remains the sole source of provenance. Bracketed
-    // numbers outside the evidence range (for example "[2026]") are ordinary
-    // content and are left alone, avoiding the year/version false positives that
-    // broad free-text citation parsing would cause.
+    // answer text that reference a supplied temporary evidence id
+    // (1..evidenceCount). It never extracts, maps, or expands citations — the
+    // structured CitationNumbers array remains the sole source of provenance.
+    // Two forms are recognized inside a citation-shaped bracket:
+    //   * a scalar or comma/semicolon list — any explicitly written id that is
+    //     itself in range triggers rejection ("[1]", "[1, 2]", "[2026, 1]");
+    //   * a dash range (a-b, a–b, a—b) — rejected when the interval it denotes
+    //     overlaps [1, evidenceCount], even if neither written endpoint is
+    //     itself in range ("[0-9]"). The interval is used ONLY to decide
+    //     rejection; its members are never enumerated into citations.
+    // Bracketed numbers/ranges wholly outside the evidence range ("[2026]",
+    // "[2026-2027]", "[0-0]") are ordinary content, avoiding the year/version
+    // false positives that broad free-text citation parsing would cause.
     private static bool ContainsReservedInlineCitationMarker(string answer, int evidenceCount)
     {
         foreach (Match bracket in InlineCitationMarkerRegex().Matches(answer))
         {
-            foreach (Match digits in CitationDigitsRegex().Matches(bracket.Value))
+            var token = bracket.Value;
+
+            // Scalar / list: an explicitly written id that is itself in range.
+            foreach (Match digits in CitationDigitsRegex().Matches(token))
             {
-                if (int.TryParse(digits.Value, NumberStyles.None, CultureInfo.InvariantCulture, out var id)
-                    && id >= 1
-                    && id <= evidenceCount)
+                if (TryParseEvidenceId(digits.Value, out var id) && id >= 1 && id <= evidenceCount)
+                {
+                    return true;
+                }
+            }
+
+            // Dash range: reject when [min, max] overlaps [1, evidenceCount].
+            foreach (Match range in InlineCitationRangeRegex().Matches(token))
+            {
+                if (TryParseEvidenceId(range.Groups[1].Value, out var a)
+                    && TryParseEvidenceId(range.Groups[2].Value, out var b)
+                    && Math.Min(a, b) <= evidenceCount
+                    && Math.Max(a, b) >= 1)
                 {
                     return true;
                 }
@@ -313,10 +333,24 @@ public sealed partial class AnswerProjectQuestionService
         return false;
     }
 
-    // A citation-shaped bracket token: [1], [^1], [1,2], [ 1, 2 ].
-    [GeneratedRegex(@"\[\s*\^?\s*[0-9]+(?:\s*,\s*\^?\s*[0-9]+)*\s*\]", RegexOptions.CultureInvariant)]
+    // Safe parse of a model-controlled numeric token; overflow/format failures
+    // yield false rather than throwing, so an oversized endpoint simply does not
+    // establish an interval.
+    private static bool TryParseEvidenceId(string value, out int id) =>
+        int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out id);
+
+    // A citation-shaped bracket token whose numbers are joined by a comma,
+    // semicolon, hyphen, or en/em dash: [1], [^1], [1,2], [ 1, 2 ], [1; 2],
+    // [1-2], [1–2].
+    [GeneratedRegex(@"\[\s*\^?\s*[0-9]+(?:\s*[,;–—-]\s*\^?\s*[0-9]+)*\s*\]", RegexOptions.CultureInvariant)]
     private static partial Regex InlineCitationMarkerRegex();
 
+    // Individual numeric tokens within a citation-shaped bracket.
     [GeneratedRegex("[0-9]+", RegexOptions.CultureInvariant)]
     private static partial Regex CitationDigitsRegex();
+
+    // A dash-joined numeric pair (ASCII hyphen, en dash, or em dash), captured
+    // as two endpoints for interval-overlap validation only.
+    [GeneratedRegex(@"([0-9]+)\s*[–—-]\s*([0-9]+)", RegexOptions.CultureInvariant)]
+    private static partial Regex InlineCitationRangeRegex();
 }

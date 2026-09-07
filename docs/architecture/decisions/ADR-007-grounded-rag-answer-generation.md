@@ -68,9 +68,15 @@ The model references evidence exclusively through the structured `citations`
 array. The system prompt forbids inline markers (`[1]`, footnotes, ids) in the
 answer text, and — as fail-closed defense-in-depth — an answered result whose
 answer text contains a bracketed reference to a supplied evidence id (`[1]`,
-`[^1]`, `[1, 2]`) is rejected with a grounding-validation error rather than
-published. This is rejection only: the code never extracts or maps citations
-from free text, so the structured array stays the sole source of truth.
+`[^1]`, `[1, 2]`, `[1; 2]`, `[1-2]`, `[1–2]`) is rejected with a
+grounding-validation error rather than published. Range syntax is never expanded
+into citations; for fail-closed validation only, a numeric dash range is
+rejected when its interval overlaps the supplied temporary evidence-id range —
+so `[0-9]` is rejected when ids `1..8` exist even though neither endpoint is
+itself a valid id, while a wholly out-of-range range such as `[2026-2027]`
+remains ordinary content. This is rejection only: the code never extracts, maps,
+or enumerates citations from free text, so the structured array stays the sole
+source of truth.
 Bracketed numbers outside the evidence range (`[2026]`, markdown links) are
 ordinary content and are left untouched, avoiding false positives. Citations are
 deduplicated preserving first occurrence in the array, then each label `N` is

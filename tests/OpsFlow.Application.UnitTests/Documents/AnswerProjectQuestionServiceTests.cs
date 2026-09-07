@@ -778,6 +778,132 @@ public sealed class AnswerProjectQuestionServiceTests
         Assert.Equal(hit.DocumentChunkId, citation.DocumentChunkId);
     }
 
+    [Fact]
+    public async Task Answer_rejects_ascii_range_marker_in_answer_text()
+    {
+        var (service, projects, _, semantic, _, answerGen) = CreateService();
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit(text: "one"), MakeHit(text: "two")];
+        answerGen.Output = Answered("See [1-2].", 1, 2);
+
+        await Assert.ThrowsAsync<GroundedAnswerValidationException>(() =>
+            service.AnswerAsync(MakeQuery(), CancellationToken.None));
+        Assert.Equal(1, answerGen.CallCount);
+    }
+
+    [Fact]
+    public async Task Answer_rejects_en_dash_range_marker_in_answer_text()
+    {
+        var (service, projects, _, semantic, _, answerGen) = CreateService();
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit(text: "one"), MakeHit(text: "two")];
+        answerGen.Output = Answered("See [1–2].", 1, 2);
+
+        await Assert.ThrowsAsync<GroundedAnswerValidationException>(() =>
+            service.AnswerAsync(MakeQuery(), CancellationToken.None));
+        Assert.Equal(1, answerGen.CallCount);
+    }
+
+    [Fact]
+    public async Task Answer_rejects_semicolon_list_marker_in_answer_text()
+    {
+        var (service, projects, _, semantic, _, answerGen) = CreateService();
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit(text: "one"), MakeHit(text: "two")];
+        answerGen.Output = Answered("See [1; 2].", 1, 2);
+
+        await Assert.ThrowsAsync<GroundedAnswerValidationException>(() =>
+            service.AnswerAsync(MakeQuery(), CancellationToken.None));
+        Assert.Equal(1, answerGen.CallCount);
+    }
+
+    [Fact]
+    public async Task Answer_rejects_range_marker_when_one_endpoint_is_in_range()
+    {
+        // "[1-2026]" is rejected because 1 is an explicitly written id inside the
+        // supplied evidence range; the range is not expanded.
+        var (service, projects, _, semantic, _, answerGen) = CreateService();
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit()];
+        answerGen.Output = Answered("See [1-2026].", 1);
+
+        await Assert.ThrowsAsync<GroundedAnswerValidationException>(() =>
+            service.AnswerAsync(MakeQuery(), CancellationToken.None));
+        Assert.Equal(1, answerGen.CallCount);
+    }
+
+    [Fact]
+    public async Task Answer_allows_out_of_range_dash_marker()
+    {
+        // Both endpoints are outside the evidence range, so "[2026-2027]" is
+        // ordinary content, not a reserved evidence marker.
+        var (service, projects, _, semantic, _, answerGen) = CreateService();
+        projects.ExistsResult = true;
+        var hit = new SemanticChunkHit(Guid.NewGuid(), Guid.NewGuid(), 0, 0, 5, "hello", 0.1);
+        semantic.RetrieveResult = [hit];
+        answerGen.Output = Answered("The window was [2026-2027].", 1);
+
+        var result = await service.AnswerAsync(MakeQuery(), CancellationToken.None);
+
+        Assert.Equal(AnswerProjectQuestionStatus.Success, result.Status);
+        Assert.Equal("The window was [2026-2027].", result.Answer!.Text);
+        var citation = Assert.Single(result.Answer.Citations);
+        Assert.Equal(1, citation.CitationNumber);
+        Assert.Equal(hit.DocumentChunkId, citation.DocumentChunkId);
+    }
+
+    [Fact]
+    public async Task Answer_rejects_spanning_range_with_out_of_range_endpoints()
+    {
+        // Neither endpoint (0, 3) is itself a valid id for two evidence items,
+        // but the interval [0, 3] overlaps ids 1..2, so it must be rejected by
+        // interval overlap — not by an endpoint already being in range.
+        var (service, projects, _, semantic, _, answerGen) = CreateService();
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit(text: "one"), MakeHit(text: "two")];
+        answerGen.Output = Answered("See [0-3].", 1, 2);
+
+        await Assert.ThrowsAsync<GroundedAnswerValidationException>(() =>
+            service.AnswerAsync(MakeQuery(), CancellationToken.None));
+        Assert.Equal(1, answerGen.CallCount);
+    }
+
+    [Fact]
+    public async Task Answer_rejects_reversed_spanning_range()
+    {
+        // Reversed bounds must be normalized: [3-0] denotes the same interval as
+        // [0-3] and must also be rejected.
+        var (service, projects, _, semantic, _, answerGen) = CreateService();
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit(text: "one"), MakeHit(text: "two")];
+        answerGen.Output = Answered("See [3-0].", 1, 2);
+
+        await Assert.ThrowsAsync<GroundedAnswerValidationException>(() =>
+            service.AnswerAsync(MakeQuery(), CancellationToken.None));
+        Assert.Equal(1, answerGen.CallCount);
+    }
+
+    [Fact]
+    public async Task Answer_allows_range_that_does_not_overlap_evidence()
+    {
+        // "[0-0]" is a valid range token but its interval [0, 0] does not
+        // intersect the evidence ids (1..1), so it is ordinary content. This
+        // proves the validator uses interval overlap, not mere range syntax.
+        var (service, projects, _, semantic, _, answerGen) = CreateService();
+        projects.ExistsResult = true;
+        var hit = new SemanticChunkHit(Guid.NewGuid(), Guid.NewGuid(), 0, 0, 5, "hello", 0.1);
+        semantic.RetrieveResult = [hit];
+        answerGen.Output = Answered("The count was [0-0].", 1);
+
+        var result = await service.AnswerAsync(MakeQuery(), CancellationToken.None);
+
+        Assert.Equal(AnswerProjectQuestionStatus.Success, result.Status);
+        Assert.Equal("The count was [0-0].", result.Answer!.Text);
+        var citation = Assert.Single(result.Answer.Citations);
+        Assert.Equal(1, citation.CitationNumber);
+        Assert.Equal(hit.DocumentChunkId, citation.DocumentChunkId);
+    }
+
     // ================================================================
     // Insufficient-evidence contract
     // ================================================================
