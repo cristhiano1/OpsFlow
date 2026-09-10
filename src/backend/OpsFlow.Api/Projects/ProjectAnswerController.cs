@@ -77,6 +77,16 @@ public sealed class ProjectAnswerController : ControllerBase
         {
             throw;
         }
+        catch (EmbeddingGenerationException ex)
+        {
+            logger.LogError(
+                ex,
+                "Embedding provider failure for answer in Project {ProjectId}, Organization {OrganizationId}",
+                projectId,
+                organizationId);
+            Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            return new EmptyResult();
+        }
         catch (AnswerGenerationException ex)
         {
             logger.LogError(

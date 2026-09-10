@@ -572,6 +572,34 @@ public sealed class AnswerEndpointTests : IDisposable
     }
 
     [Fact]
+    public async Task Answer_embedding_provider_failure_returns_503_without_details()
+    {
+        // The embedding generator fails during hybrid retrieval (before answer
+        // generation). This provider/dependency failure must map to 503, exactly
+        // like the search endpoint — not fall through to a generic 500.
+        var (token, _, projectId) = await SeedProjectAndLoginAsync();
+
+        _fakeEmbedding.ExceptionToThrow = new EmbeddingGenerationException("embedding failure sentinel");
+        try
+        {
+            using var response = await _client.SendAsync(
+                BuildAnswerRequest(token, projectId, new { question = "what is the deployment process" }));
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+
+            var raw = await response.Content.ReadAsStringAsync();
+            Assert.DoesNotContain("embedding failure sentinel", raw);
+            Assert.DoesNotContain("openai", raw, StringComparison.OrdinalIgnoreCase);
+
+            // Answer generation must never run once embedding retrieval fails.
+            Assert.Equal(0, _fakeAnswer.CallCount);
+        }
+        finally
+        {
+            _fakeEmbedding.ExceptionToThrow = null;
+        }
+    }
+
+    [Fact]
     public async Task Answer_grounding_contract_violation_returns_502_without_details()
     {
         using var scope = _factory.Services.CreateScope();
@@ -638,11 +666,18 @@ public sealed class AnswerEndpointTests : IDisposable
 
         public IReadOnlyList<string>? LastTexts { get; private set; }
 
+        public Exception? ExceptionToThrow { get; set; }
+
         public Task<IReadOnlyList<ReadOnlyMemory<float>>> GenerateAsync(
             IReadOnlyList<string> texts,
             CancellationToken cancellationToken)
         {
             LastTexts = texts;
+
+            if (ExceptionToThrow is not null)
+            {
+                throw ExceptionToThrow;
+            }
 
             IReadOnlyList<ReadOnlyMemory<float>> result =
                 [.. texts.Select(_ =>
