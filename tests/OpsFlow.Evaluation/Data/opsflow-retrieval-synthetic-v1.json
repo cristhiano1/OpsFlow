@@ -1,0 +1,225 @@
+{
+  "datasetVersion": "1.0",
+  "datasetId": "opsflow-retrieval-synthetic-v1",
+  "description": "Synthetic, deterministic OpsFlow operations corpus for offline retrieval regression evaluation. All content is fabricated and contains no customer data, personal data, or secrets. Gold relevance grades are authored from the meaning of each query, not from any observed ranking. This is a retrieval regression benchmark, NOT a real-world RAG accuracy measurement.",
+  "documents": [
+    {
+      "documentKey": "deployment-guide",
+      "title": "Production Deployment Guide",
+      "chunks": [
+        {
+          "chunkKey": "deploy-prerequisites",
+          "text": "Before starting a production deployment, verify that the change request is approved, the staging environment passed its smoke tests, and the release artifact is signed. Confirm the deployment window is currently open before proceeding."
+        },
+        {
+          "chunkKey": "deploy-execution",
+          "text": "To execute a deployment, promote the signed release artifact from staging to production through the delivery pipeline, then run the post-deployment health checks and monitor the error rate and latency for at least fifteen minutes."
+        },
+        {
+          "chunkKey": "deploy-rollback",
+          "text": "If a production deployment fails its health checks, roll it back by redeploying the previous known-good release tag and invalidating the CDN cache. Notify the on-call lead that a rollback occurred and record it in the deployment log."
+        }
+      ]
+    },
+    {
+      "documentKey": "change-management",
+      "title": "Change Management Policy",
+      "chunks": [
+        {
+          "chunkKey": "change-approval",
+          "text": "A standard change requires approval from the change manager before it is scheduled. An emergency change may proceed with verbal approval from the on-call lead but must be recorded in the change record within twenty-four hours."
+        },
+        {
+          "chunkKey": "change-window",
+          "text": "Routine maintenance is performed only during the approved maintenance window on Sunday between 02:00 and 04:00 UTC. Historical note: an out-of-window rollback of the billing service in 2024 was an exception and is not the standard procedure."
+        },
+        {
+          "chunkKey": "change-freeze",
+          "text": "During the end-of-quarter change freeze, no non-emergency production changes are permitted. The freeze protects revenue-critical financial reporting from avoidable disruption during the close period."
+        }
+      ]
+    },
+    {
+      "documentKey": "incident-response",
+      "title": "Incident Response Runbook",
+      "chunks": [
+        {
+          "chunkKey": "incident-severity",
+          "text": "Incident severity is classified from Sev1 to Sev4. A Sev1 is a customer-facing outage affecting all users, while a Sev3 is a minor degradation that has a workaround. The assigned severity determines the required response time."
+        },
+        {
+          "chunkKey": "incident-escalation",
+          "text": "If a Sev1 or Sev2 incident is not mitigated within thirty minutes, escalate to the incident commander and open a coordination bridge. Continue escalating every thirty minutes until the incident is mitigated."
+        },
+        {
+          "chunkKey": "incident-postmortem",
+          "text": "Every Sev1 and Sev2 incident requires a blameless postmortem within five business days. The postmortem documents the timeline, the root cause, and the follow-up action items with owners and due dates."
+        }
+      ]
+    },
+    {
+      "documentKey": "access-control",
+      "title": "Access Control Standard",
+      "chunks": [
+        {
+          "chunkKey": "access-request-approval",
+          "text": "A request for access to a production system requires approval from the resource owner and the security team. Access approvals are distinct from change approvals and follow the principle of least privilege."
+        },
+        {
+          "chunkKey": "access-review",
+          "text": "Access to production systems is reviewed every quarter. Reviewers confirm that each grant is still required for the person's role and revoke any access that is no longer justified."
+        },
+        {
+          "chunkKey": "access-revocation",
+          "text": "When an employee leaves the company or changes role, revoke their production access within twenty-four hours. Automated deprovisioning removes their accounts from the identity provider and rotates any shared credentials."
+        }
+      ]
+    },
+    {
+      "documentKey": "backup-recovery",
+      "title": "Backup and Recovery Procedures",
+      "chunks": [
+        {
+          "chunkKey": "backup-schedule",
+          "text": "Production databases take a full backup every night and transaction-log backups every fifteen minutes. Backups are replicated to a separate region and retained for thirty-five days."
+        },
+        {
+          "chunkKey": "backup-restore",
+          "text": "To restore a database from backup, provision a new instance, restore the most recent full backup, then apply the transaction-log backups in order up to the desired recovery point. Validate data integrity before switching production traffic to it."
+        },
+        {
+          "chunkKey": "backup-verification",
+          "text": "Backup integrity is verified every week by performing a test restore into an isolated environment and running consistency checks against the restored data."
+        }
+      ]
+    },
+    {
+      "documentKey": "security-policy",
+      "title": "Security Policy",
+      "chunks": [
+        {
+          "chunkKey": "security-password",
+          "text": "User passwords must be at least twelve characters long and must be changed if a compromise is suspected. Multi-factor authentication is required for all administrative and production accounts."
+        },
+        {
+          "chunkKey": "security-encryption",
+          "text": "Data is encrypted in transit using TLS 1.2 or higher and at rest using AES-256. Encryption keys are stored in the managed key vault and rotated at least once per year."
+        },
+        {
+          "chunkKey": "security-reporting",
+          "text": "A suspected security breach must be reported to the security team immediately through the dedicated security channel. Do not attempt to investigate a suspected breach on your own."
+        }
+      ]
+    },
+    {
+      "documentKey": "service-ownership",
+      "title": "Service Ownership and On-Call",
+      "chunks": [
+        {
+          "chunkKey": "ownership-registry",
+          "text": "Every production service has a single named owning team recorded in the service registry, along with its criticality tier and a primary contact for coordination."
+        },
+        {
+          "chunkKey": "ownership-handoff",
+          "text": "When ownership of a service transfers between teams, complete the handoff checklist covering runbooks, alerts, dashboards, and on-call responsibilities, and update the service registry before the agreed transfer date."
+        },
+        {
+          "chunkKey": "oncall-rotation",
+          "text": "Each owning team maintains a weekly on-call rotation. The on-call engineer must acknowledge a page within five minutes and is the first responder for incidents affecting their service."
+        }
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "caseId": "rollback-failed-deployment",
+      "query": "How do I roll back a production deployment that failed its health checks?",
+      "relevance": { "deploy-rollback": 3, "deploy-execution": 1 }
+    },
+    {
+      "caseId": "deployment-prerequisites",
+      "query": "What must be verified before starting a production deployment?",
+      "relevance": { "deploy-prerequisites": 3 }
+    },
+    {
+      "caseId": "standard-change-approval",
+      "query": "Who approves a standard change before it can be scheduled?",
+      "relevance": { "change-approval": 3 }
+    },
+    {
+      "caseId": "emergency-change-approval",
+      "query": "How is an emergency change approved and documented?",
+      "relevance": { "change-approval": 3 }
+    },
+    {
+      "caseId": "maintenance-window",
+      "query": "When is routine maintenance allowed to be performed?",
+      "relevance": { "change-window": 3 }
+    },
+    {
+      "caseId": "change-freeze-policy",
+      "query": "Are production changes allowed during the end-of-quarter freeze?",
+      "relevance": { "change-freeze": 3 }
+    },
+    {
+      "caseId": "incident-severity-classification",
+      "query": "How is the severity of an incident classified?",
+      "relevance": { "incident-severity": 3 }
+    },
+    {
+      "caseId": "incident-escalation-timing",
+      "query": "When should an unmitigated incident be escalated to the incident commander?",
+      "relevance": { "incident-escalation": 3, "incident-severity": 1 }
+    },
+    {
+      "caseId": "postmortem-requirement",
+      "query": "Which incidents require a postmortem and by when must it be completed?",
+      "relevance": { "incident-postmortem": 3 }
+    },
+    {
+      "caseId": "production-access-approval",
+      "query": "Who must approve a request for access to a production system?",
+      "relevance": { "access-request-approval": 3 }
+    },
+    {
+      "caseId": "access-revocation-timing",
+      "query": "How quickly must production access be revoked when an employee leaves?",
+      "relevance": { "access-revocation": 3, "access-review": 1 }
+    },
+    {
+      "caseId": "restore-database",
+      "query": "What are the steps to restore a database from backup to a specific recovery point?",
+      "relevance": { "backup-restore": 3, "backup-schedule": 1 }
+    },
+    {
+      "caseId": "backup-frequency",
+      "query": "How often are production database backups taken?",
+      "relevance": { "backup-schedule": 3 }
+    },
+    {
+      "caseId": "mfa-requirement",
+      "query": "Which accounts are required to use multi-factor authentication?",
+      "relevance": { "security-password": 3 }
+    },
+    {
+      "caseId": "report-security-incident",
+      "query": "How do I report a suspected security breach?",
+      "relevance": { "security-reporting": 3 }
+    },
+    {
+      "caseId": "service-handoff",
+      "query": "What must be completed when a service is handed off to another team?",
+      "relevance": { "ownership-handoff": 3, "ownership-registry": 1 }
+    },
+    {
+      "caseId": "oncall-ack-time",
+      "query": "How fast must the on-call engineer acknowledge a page?",
+      "relevance": { "oncall-rotation": 3 }
+    },
+    {
+      "caseId": "sev1-handling-process",
+      "query": "What is the process for handling a Sev1 incident, including escalation and follow-up?",
+      "relevance": { "incident-escalation": 3, "incident-postmortem": 2, "incident-severity": 2 }
+    }
+  ]
+}
