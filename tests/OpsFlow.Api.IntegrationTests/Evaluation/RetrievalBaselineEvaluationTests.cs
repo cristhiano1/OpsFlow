@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Data.SqlTypes;
@@ -64,11 +66,12 @@ public sealed class RetrievalBaselineEvaluationTests : IDisposable
     [Fact]
     public async Task Baseline_evaluation_reports_metrics_and_holds_structural_invariants()
     {
+        const string scenario = "baseline";
         var dataset = EvaluationDatasetLoader.LoadSyntheticV1();
-        var organizationId = Guid.NewGuid();
-        var projectId = Guid.NewGuid();
+        var organizationId = StableGuid($"{scenario}:org-a");
+        var projectId = StableGuid($"{scenario}:project-a");
 
-        var chunkKeyById = await SeedCorpusAsync(organizationId, projectId, dataset);
+        var chunkKeyById = await SeedCorpusAsync(scenario, organizationId, projectId, dataset);
         await WaitForFullTextPopulationAsync();
 
         var result = await RunBaselineAsync(dataset, organizationId, projectId, chunkKeyById);
@@ -107,18 +110,20 @@ public sealed class RetrievalBaselineEvaluationTests : IDisposable
     [Fact]
     public async Task Baseline_never_returns_foreign_tenant_chunks()
     {
+        const string scenario = "tenant-isolation";
         var dataset = EvaluationDatasetLoader.LoadSyntheticV1();
 
-        var organizationA = Guid.NewGuid();
-        var projectA = Guid.NewGuid();
-        var chunkKeyById = await SeedCorpusAsync(organizationA, projectA, dataset);
+        var organizationA = StableGuid($"{scenario}:org-a");
+        var projectA = StableGuid($"{scenario}:project-a");
+        var chunkKeyById = await SeedCorpusAsync(scenario, organizationA, projectA, dataset);
 
         // Organization B holds a distractor chunk whose text is nearly identical
         // to a high-value Organization A chunk. If tenant scoping were broken it
         // would surface in Organization A's rankings.
-        var organizationB = Guid.NewGuid();
-        var projectB = Guid.NewGuid();
+        var organizationB = StableGuid($"{scenario}:org-b");
+        var projectB = StableGuid($"{scenario}:project-b");
         await SeedForeignDistractorAsync(
+            scenario,
             organizationB,
             projectB,
             "If a production deployment fails its health checks, roll it back by redeploying " +
@@ -180,6 +185,7 @@ public sealed class RetrievalBaselineEvaluationTests : IDisposable
     }
 
     private async Task<IReadOnlyDictionary<string, Guid>> SeedCorpusAsync(
+        string scenario,
         Guid organizationId,
         Guid projectId,
         EvaluationDataset dataset)
@@ -202,7 +208,7 @@ public sealed class RetrievalBaselineEvaluationTests : IDisposable
 
         foreach (var document in dataset.Documents)
         {
-            var documentId = Guid.NewGuid();
+            var documentId = StableGuid($"{scenario}:document:{document.DocumentKey}");
             db.Documents.Add(new Document(
                 documentId, organizationId, projectId, document.DocumentKey + ".txt", "text/plain", 100, Timestamp));
             await db.SaveChangesAsync();
@@ -217,7 +223,7 @@ public sealed class RetrievalBaselineEvaluationTests : IDisposable
             for (int i = 0; i < document.Chunks.Count; i++)
             {
                 var chunk = document.Chunks[i];
-                var chunkId = Guid.NewGuid();
+                var chunkId = StableGuid($"{scenario}:chunk:{chunk.ChunkKey}");
                 chunkIds[i] = chunkId;
                 db.DocumentChunks.Add(new DocumentChunk(
                     chunkId, documentId, i, offset, offset + chunk.Text.Length, chunk.Text));
@@ -227,7 +233,7 @@ public sealed class RetrievalBaselineEvaluationTests : IDisposable
 
             await db.SaveChangesAsync();
 
-            var embeddingSetId = Guid.NewGuid();
+            var embeddingSetId = StableGuid($"{scenario}:embedding-set:{document.DocumentKey}");
             db.DocumentEmbeddingSets.Add(new DocumentEmbeddingSet(
                 embeddingSetId, documentId, 1, EmbeddingProfiles.SemanticV1Id,
                 EmbeddingProfiles.SemanticV1ModelId, EmbeddingProfiles.SemanticV1Dimensions,
@@ -250,7 +256,8 @@ public sealed class RetrievalBaselineEvaluationTests : IDisposable
         return chunkKeyById;
     }
 
-    private async Task SeedForeignDistractorAsync(Guid organizationId, Guid projectId, string chunkText)
+    private async Task SeedForeignDistractorAsync(
+        string scenario, Guid organizationId, Guid projectId, string chunkText)
     {
         await using var db = _fixture.CreateContext();
 
@@ -266,7 +273,7 @@ public sealed class RetrievalBaselineEvaluationTests : IDisposable
         db.Projects.Add(new Project(projectId, organizationId, "Foreign Project", null, Timestamp));
         await db.SaveChangesAsync();
 
-        var documentId = Guid.NewGuid();
+        var documentId = StableGuid($"{scenario}:foreign-document");
         db.Documents.Add(new Document(
             documentId, organizationId, projectId, "foreign.txt", "text/plain", 100, Timestamp));
         await db.SaveChangesAsync();
@@ -275,11 +282,11 @@ public sealed class RetrievalBaselineEvaluationTests : IDisposable
         await db.SaveChangesAsync();
 
         db.DocumentChunkSets.Add(new DocumentChunkSet(documentId, 1, 1, Timestamp));
-        var chunkId = Guid.NewGuid();
+        var chunkId = StableGuid($"{scenario}:foreign-chunk");
         db.DocumentChunks.Add(new DocumentChunk(chunkId, documentId, 0, 0, chunkText.Length, chunkText));
         await db.SaveChangesAsync();
 
-        var embeddingSetId = Guid.NewGuid();
+        var embeddingSetId = StableGuid($"{scenario}:foreign-embedding-set");
         db.DocumentEmbeddingSets.Add(new DocumentEmbeddingSet(
             embeddingSetId, documentId, 1, EmbeddingProfiles.SemanticV1Id,
             EmbeddingProfiles.SemanticV1ModelId, EmbeddingProfiles.SemanticV1Dimensions, 1, Timestamp));
@@ -290,6 +297,22 @@ public sealed class RetrievalBaselineEvaluationTests : IDisposable
             Embedding = new SqlVector<float>(DeterministicContentEmbeddingGenerator.Embed(chunkText)),
         });
         await db.SaveChangesAsync();
+    }
+
+    // Deterministic, cross-platform identifier derivation. The seed data's
+    // GUIDs act as tie-breakers in the production ordering (semantic and lexical
+    // both fall back to DocumentId, RRF to DocumentChunkId), so they must be
+    // stable across runs for the baseline to be reproducible. Uses SHA-256 over
+    // a namespaced UTF-8 key and the first 16 hash bytes — never Guid.NewGuid,
+    // GetHashCode, Random, time, or culture-sensitive transforms. Callers pass a
+    // scenario-namespaced key so the two tests sharing this database never
+    // collide on a primary key.
+    private static Guid StableGuid(string key)
+    {
+        byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes("opsflow-retrieval-eval-id-v1:" + key));
+        byte[] guidBytes = new byte[16];
+        Array.Copy(hash, guidBytes, guidBytes.Length);
+        return new Guid(guidBytes);
     }
 
     private async Task WaitForFullTextPopulationAsync(TimeSpan? timeout = null)
