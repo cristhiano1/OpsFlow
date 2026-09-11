@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Retrieval-evaluation support library (PR #27). This is NOT a production
+    project and NOT a test-runner assembly: it holds the provider-neutral
+    dataset contract, metric primitives, evaluator, and report formatter, plus
+    the versioned synthetic dataset embedded as a resource. It must never be
+    referenced by any production project (OpsFlow.Domain / Application /
+    Infrastructure / Api / Contracts); the reference direction is one-way from
+    the test projects into this library.
+  -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Data\opsflow-retrieval-synthetic-v1.json" />
+  </ItemGroup>
+
+</Project>
