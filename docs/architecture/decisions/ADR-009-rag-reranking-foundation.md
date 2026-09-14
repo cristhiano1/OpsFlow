@@ -79,8 +79,11 @@ The foundation is fail-closed: a reranking failure fails the call rather than
 silently returning the hybrid ordering. `ChunkRerankingException` covers
 provider/transport availability failures and provider-capacity mismatches;
 `ChunkRerankingValidationException` covers contract violations in a well-formed
-response. `OperationCanceledException` always propagates unwrapped — cancellation
-is never a provider failure. A fail-open policy (fall back to hybrid RRF when the
+response. Caller-requested cancellation always propagates unwrapped — an
+`OperationCanceledException` observed while the caller's token is cancelled is
+never a provider failure — but a provider-local timeout that surfaces as
+cancellation while the caller's token is not cancelled is treated as a reranker
+failure and wrapped in `ChunkRerankingException`. A fail-open policy (fall back to hybrid RRF when the
 reranker is unavailable), if adopted, belongs to the later RAG-activation
 decision and must expose whether reranking was applied without leaking provider
 internals.

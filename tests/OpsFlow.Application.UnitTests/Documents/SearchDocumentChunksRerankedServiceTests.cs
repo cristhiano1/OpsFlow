@@ -300,6 +300,29 @@ public sealed class SearchDocumentChunksRerankedServiceTests
             harness.Service.SearchAsync(MakeQuery(topK: 3), CancellationToken.None));
     }
 
+    [Fact]
+    public async Task Null_score_entry_is_rejected()
+    {
+        // Non-null collection, exact count, but one element is null. This must
+        // fail validation (never NullReferenceException), and the null element
+        // is neither skipped nor repaired.
+        var reranker = new FakeChunkReranker
+        {
+            ScoreSelector = request =>
+            {
+                var scores = request.Candidates
+                    .Select(c => new ChunkRerankScore(c.DocumentChunkId, 1.0))
+                    .ToList();
+                scores[1] = null!;
+                return scores;
+            },
+        };
+        var harness = CreateHarness(MakeSemanticHits(3), reranker);
+
+        await Assert.ThrowsAsync<ChunkRerankingValidationException>(() =>
+            harness.Service.SearchAsync(MakeQuery(topK: 3), CancellationToken.None));
+    }
+
     // ================================================================
     // Ordering & metadata
     // ================================================================
@@ -483,13 +506,55 @@ public sealed class SearchDocumentChunksRerankedServiceTests
     }
 
     [Fact]
-    public async Task Cancellation_from_reranker_propagates_unwrapped()
+    public async Task Caller_requested_cancellation_from_reranker_propagates_unwrapped()
     {
-        var reranker = new FakeChunkReranker { ExceptionToThrow = new OperationCanceledException() };
+        using var cts = new CancellationTokenSource();
+        // Hybrid runs with a live token; the token is cancelled at the exact
+        // moment the reranker executes, so this genuinely reaches the reranker
+        // AND observes caller-requested cancellation. It must NOT be wrapped.
+        var reranker = new FakeChunkReranker
+        {
+            OnRerank = cts.Cancel,
+            ExceptionToThrow = new OperationCanceledException(),
+        };
         var harness = CreateHarness(MakeSemanticHits(3), reranker);
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+        var ex = await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            harness.Service.SearchAsync(MakeQuery(topK: 3), cts.Token));
+
+        Assert.IsNotType<ChunkRerankingException>(ex);
+        Assert.Equal(1, harness.Reranker.CallCount);
+    }
+
+    [Fact]
+    public async Task Provider_local_task_cancellation_is_wrapped_as_reranking_exception()
+    {
+        // Caller token is NOT cancelled. A provider-local timeout commonly
+        // surfaces as TaskCanceledException; it must be classified as a reranker
+        // failure, not caller cancellation, and preserve the original exception.
+        var original = new TaskCanceledException("provider timeout");
+        var reranker = new FakeChunkReranker { ExceptionToThrow = original };
+        var harness = CreateHarness(MakeSemanticHits(3), reranker);
+
+        var ex = await Assert.ThrowsAsync<ChunkRerankingException>(() =>
             harness.Service.SearchAsync(MakeQuery(topK: 3), CancellationToken.None));
+
+        Assert.Same(original, ex.InnerException);
+    }
+
+    [Fact]
+    public async Task Provider_local_operation_cancellation_is_wrapped_as_reranking_exception()
+    {
+        // Same rule for a bare OperationCanceledException while the caller's
+        // token is not cancelled: wrapped, with the original preserved.
+        var original = new OperationCanceledException("provider aborted");
+        var reranker = new FakeChunkReranker { ExceptionToThrow = original };
+        var harness = CreateHarness(MakeSemanticHits(3), reranker);
+
+        var ex = await Assert.ThrowsAsync<ChunkRerankingException>(() =>
+            harness.Service.SearchAsync(MakeQuery(topK: 3), CancellationToken.None));
+
+        Assert.Same(original, ex.InnerException);
     }
 
     [Fact]
@@ -606,12 +671,21 @@ public sealed class SearchDocumentChunksRerankedServiceTests
         public Exception? ExceptionToThrow { get; set; }
         public Func<ChunkRerankRequest, IReadOnlyList<ChunkRerankScore>>? ScoreSelector { get; set; }
 
+        /// <summary>
+        /// Optional hook run when the reranker is invoked, before it throws or
+        /// scores. Lets a test mutate ambient state (e.g. cancel the caller's
+        /// token) at the exact moment the reranker executes.
+        /// </summary>
+        public Action? OnRerank { get; set; }
+
         public Task<IReadOnlyList<ChunkRerankScore>> RerankAsync(
             ChunkRerankRequest request,
             CancellationToken cancellationToken)
         {
             CallCount++;
             LastRequest = request;
+
+            OnRerank?.Invoke();
 
             if (ExceptionToThrow is not null)
             {

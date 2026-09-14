@@ -172,9 +172,13 @@ public sealed class SearchDocumentChunksRerankedService
         {
             return await _reranker.RerankAsync(new ChunkRerankRequest(query, candidates), cancellationToken);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // Cancellation is never a provider failure.
+            // Only caller-requested cancellation propagates unchanged. A
+            // provider-local timeout that surfaces as OperationCanceledException
+            // (or TaskCanceledException) while the caller's token is NOT
+            // cancelled is a reranker failure: it falls through to the generic
+            // handler below and is wrapped as a ChunkRerankingException.
             throw;
         }
         catch (ChunkRerankingException)
@@ -209,6 +213,14 @@ public sealed class SearchDocumentChunksRerankedService
         var scoreByChunkId = new Dictionary<Guid, double>(scores.Count);
         foreach (var score in scores)
         {
+            if (score is null)
+            {
+                // A well-formed collection can still contain a null element from a
+                // malformed provider response or deserialization. Reject it before
+                // any dereference; never skip, repair, or reduce the count.
+                throw new ChunkRerankingValidationException("Reranker returned a null score entry.");
+            }
+
             if (!hitByChunkId.ContainsKey(score.DocumentChunkId))
             {
                 throw new ChunkRerankingValidationException(
