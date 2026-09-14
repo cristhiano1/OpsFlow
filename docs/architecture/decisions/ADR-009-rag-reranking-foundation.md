@@ -50,9 +50,10 @@ citation trust model of ADR-007.
 
 Reranker output is untrusted and fails closed. The service requires exactly one
 finite score for every supplied candidate and rejects — via
-`ChunkRerankingValidationException` — a null collection, a wrong score count, an
-unknown candidate id, a duplicate id, a missing candidate, or a non-finite score
-(`NaN`, `±∞`). Nothing is silently dropped, deduplicated, or invented.
+`ChunkRerankingValidationException` — a null collection, a null score entry, a
+wrong score count, an unknown candidate id, a duplicate id, a missing candidate,
+or a non-finite score (`NaN`, `±∞`). A null score entry is rejected before any
+of its fields are read. Nothing is silently dropped, deduplicated, or invented.
 
 ### Deterministic ordering
 
@@ -101,10 +102,13 @@ boundary, adapter tests, and DI registration) and an evidence-based quality gate
 
 ### Evaluation methodology and honest claims
 
-The SQL-backed comparison retrieves one fused pool (depth 20) from the real
-pipeline and evaluates two orderings of that same pool — baseline (RRF) and
-candidate (the real reranked service driven by the test reranker) — on the same
-dataset, tenant, query, and K = {1, 3, 5, 8}, reporting per-K deltas. It asserts
+The SQL-backed comparison runs the baseline hybrid retrieval and the reranked
+path separately against the real pipeline (depth 20). A test-only recording
+reranker captures the candidate request from the reranked path, and the test
+proves it is element-for-element identical to the baseline RRF pool before
+evaluating the two rankings — baseline (RRF) and candidate (the real reranked
+service driven by the test reranker) — on the same dataset, tenant, query, and
+K = {1, 3, 5, 8}, reporting per-K deltas. It asserts
 architectural invariants only (tenant isolation, no duplicate/foreign ids, pool
 bounds ≤ 20, metrics in [0, 1]) and is **report-only**: it never asserts the
 candidate beats the baseline. A deterministic token-overlap scorer proves

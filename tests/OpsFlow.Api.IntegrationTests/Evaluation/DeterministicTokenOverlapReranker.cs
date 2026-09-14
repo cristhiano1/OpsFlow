@@ -14,8 +14,7 @@ namespace OpsFlow.Api.IntegrationTests.Evaluation;
 /// reranking quality. It uses only legitimate runtime inputs — the query and
 /// each candidate's text — and never touches evaluation data (relevance grades,
 /// case ids, expected chunk keys, or metrics). The score is a transparent,
-/// auditable overlap fraction with a tiny deterministic tie-adjustment; it is
-/// not tuned against any gold labels.
+/// auditable overlap fraction; it is not tuned against any gold labels.
 /// </para>
 /// </summary>
 internal sealed class DeterministicTokenOverlapReranker : IChunkReranker

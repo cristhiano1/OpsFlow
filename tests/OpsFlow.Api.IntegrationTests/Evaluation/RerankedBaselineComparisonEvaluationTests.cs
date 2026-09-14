@@ -21,11 +21,13 @@ using Xunit.Abstractions;
 namespace OpsFlow.Api.IntegrationTests.Evaluation;
 
 /// <summary>
-/// SQL-backed baseline-vs-candidate retrieval comparison. Retrieves a single
-/// fused candidate pool of depth 20 from the real hybrid pipeline (real semantic
-/// vector retrieval, real full-text retrieval, real RRF), then compares two
-/// orderings of that same pool on the same dataset/tenant/query/K values:
-/// baseline (RRF order) versus candidate (the real
+/// SQL-backed baseline-vs-candidate retrieval comparison. Runs the baseline
+/// hybrid retrieval and the reranked path separately against the real pipeline
+/// (real semantic vector retrieval, real full-text retrieval, real RRF) at a
+/// candidate depth of 20, then proves the reranker's captured candidate request
+/// is element-for-element identical to the baseline RRF pool before comparing
+/// their rankings on the same dataset/tenant/query/K values: baseline (RRF order)
+/// versus candidate (the real
 /// <see cref="SearchDocumentChunksRerankedService"/> driven by a deterministic
 /// test reranker). Only the embedding provider is replaced.
 ///
