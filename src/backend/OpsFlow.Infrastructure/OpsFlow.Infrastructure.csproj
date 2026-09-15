@@ -6,6 +6,7 @@
     <PackageReference Include="Microsoft.IdentityModel.Tokens" />
     <PackageReference Include="DocumentFormat.OpenXml" />
     <PackageReference Include="OpenAI" />
+    <PackageReference Include="AWSSDK.BedrockAgentRuntime" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\OpsFlow.Application\OpsFlow.Application.csproj" />
