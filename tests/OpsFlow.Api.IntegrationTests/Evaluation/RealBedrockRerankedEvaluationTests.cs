@@ -25,7 +25,8 @@ namespace OpsFlow.Api.IntegrationTests.Evaluation;
 
 /// <summary>
 /// MANUAL, opt-in real-provider reranking evaluation against Amazon Bedrock
-/// (Cohere Rerank 3.5). It reuses the deterministic synthetic corpus, the real
+/// (Cohere Rerank 3.5 by default; the configured BedrockReranker model/region are
+/// honored). It reuses the deterministic synthetic corpus, the real
 /// SQL hybrid-retrieval baseline, the fair-pool proof, and the shared
 /// <see cref="RetrievalEvaluator"/> metrics, replacing only the reranker with the
 /// production <see cref="BedrockChunkReranker"/>.
@@ -85,20 +86,25 @@ public sealed class RealBedrockRerankedEvaluationTests : IDisposable
         var chunkKeyById = await SeedCorpusAsync(scenario, organizationId, projectId, dataset);
         await WaitForFullTextPopulationAsync();
 
-        var options = Options.Create(new BedrockRerankerOptions
-        {
-            Region = "eu-central-1",
-            ModelId = "cohere.rerank-v3-5:0",
-            TimeoutSeconds = 30,
-        });
-
         var baselineByCaseId = new Dictionary<string, IReadOnlyList<RetrievalEvaluationHit>>(StringComparer.Ordinal);
         var candidateByCaseId = new Dictionary<string, IReadOnlyList<RetrievalEvaluationHit>>(StringComparer.Ordinal);
 
+        // Effective, operator-configured provider identity, captured while the
+        // scope is alive so the report can truthfully name what was evaluated.
+        string evaluatedRegion;
+        string evaluatedModelId;
+
         using (var scope = _factory.Services.CreateScope())
-        using (var invoker = new BedrockRerankInvoker(options, NullLogger<BedrockRerankInvoker>.Instance))
         {
+            // Consume the SAME BedrockReranker options the application host bound
+            // from configuration; do not reconstruct hardcoded constants, so that
+            // BedrockReranker__Region / __ModelId / __TimeoutSeconds all flow through.
+            var options = scope.ServiceProvider.GetRequiredService<IOptions<BedrockRerankerOptions>>();
+            evaluatedRegion = options.Value.Region;
+            evaluatedModelId = options.Value.ModelId;
+
             var hybrid = scope.ServiceProvider.GetRequiredService<SearchDocumentChunksHybridService>();
+            using var invoker = new BedrockRerankInvoker(options, NullLogger<BedrockRerankInvoker>.Instance);
             var realReranker = new BedrockChunkReranker(invoker, options);
 
             foreach (var evaluationCase in dataset.Cases)
@@ -135,7 +141,7 @@ public sealed class RealBedrockRerankedEvaluationTests : IDisposable
             Assert.InRange(aggregate.MeanNdcg, 0.0, 1.0);
         }
 
-        _output.WriteLine(FormatComparison(dataset, baselineResult, candidateResult));
+        _output.WriteLine(FormatComparison(dataset, baselineResult, candidateResult, evaluatedModelId, evaluatedRegion));
     }
 
     private static List<RetrievalEvaluationHit> ToHits(
@@ -191,12 +197,14 @@ public sealed class RealBedrockRerankedEvaluationTests : IDisposable
     private static string FormatComparison(
         EvaluationDataset dataset,
         RetrievalEvaluationResult baseline,
-        RetrievalEvaluationResult candidate)
+        RetrievalEvaluationResult candidate,
+        string modelId,
+        string region)
     {
         var lines = new List<string>
         {
             "OpsFlow Real-Provider Reranked-vs-Baseline Retrieval Comparison",
-            "Provider: Amazon Bedrock, model cohere.rerank-v3-5:0 (eu-central-1).",
+            $"Provider: Amazon Bedrock, model {modelId} ({region}).",
             "REPORT-ONLY: no quality threshold; not a pass/fail on reranking quality.",
             string.Empty,
             $"Dataset: {dataset.DatasetId} (v{dataset.DatasetVersion}), cases: {baseline.CaseCount.ToString(CultureInfo.InvariantCulture)}",
