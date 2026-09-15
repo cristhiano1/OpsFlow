@@ -121,6 +121,11 @@ AWS client/network, malformed or index/score-less responses — is translated to
 Application layer. Failure messages are categorical and never include the query,
 candidate text, request payload, or credentials.
 
+The configured per-request timeout is enforced around the asynchronous
+`RerankAsync` operation with a linked cancellation token (the AWS SDK client
+timeout does not bound async calls); the original caller token remains separate
+so caller cancellation and local timeout retain distinct semantics.
+
 ### Privacy / egress boundary
 
 External inference boundary: OpsFlow → Amazon Bedrock (`eu-central-1`).

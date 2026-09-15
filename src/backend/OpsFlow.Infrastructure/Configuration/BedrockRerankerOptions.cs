@@ -29,9 +29,10 @@ public sealed class BedrockRerankerOptions
     public string ModelId { get; set; } = "cohere.rerank-v3-5:0";
 
     /// <summary>
-    /// Per-request network timeout, in seconds, applied to the Bedrock client.
-    /// A provider-local timeout is treated as a reranker failure, never as caller
-    /// cancellation.
+    /// OpsFlow per-request timeout, in seconds. It is enforced with a linked
+    /// cancellation token around the asynchronous Bedrock rerank operation (the
+    /// AWS SDK client timeout does not bound async calls). A local timeout is
+    /// treated as a reranker failure, never as caller cancellation.
     /// </summary>
     public int TimeoutSeconds { get; set; } = 30;
 }

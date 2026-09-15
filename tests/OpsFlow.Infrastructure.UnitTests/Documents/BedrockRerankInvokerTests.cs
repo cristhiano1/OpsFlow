@@ -152,4 +152,27 @@ public sealed class BedrockRerankInvokerTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             sut.Invoker.RerankAsync("q", ["a"], cts.Token));
     }
+
+    [Fact]
+    public async Task Configured_timeout_bounds_async_request_and_fails_as_reranking_exception()
+    {
+        // The transport never responds; only the configured 1s OpsFlow timeout
+        // (enforced via a linked token, since the SDK client timeout does not
+        // bound async calls) can end the call. A 5s caller safety token ensures
+        // the test cannot hang if the timeout were not enforced.
+        var handler = new PendingBedrockHandler();
+        using var sut = FakeBedrock.Sut(handler, timeoutSeconds: 1);
+
+        using var callerSafety = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var ex = await Assert.ThrowsAsync<ChunkRerankingException>(() =>
+            sut.Invoker.RerankAsync("q", ["a"], callerSafety.Token));
+
+        // The configured local timeout won — not the 5s caller safety token — so
+        // the caller token must not have been cancelled when the failure surfaced.
+        Assert.False(callerSafety.IsCancellationRequested);
+        Assert.Contains("timed out", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.IsAssignableFrom<OperationCanceledException>(ex.InnerException);
+        Assert.Equal(1, handler.CallCount);
+    }
 }

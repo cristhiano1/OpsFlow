@@ -77,6 +77,24 @@ internal sealed class ThrowingBedrockHandler : HttpMessageHandler
     }
 }
 
+/// <summary>
+/// A handler that never responds: it stays pending until the supplied
+/// cancellation token is cancelled, then throws the resulting cancellation. Used
+/// to prove the configured per-request timeout actually bounds the async call.
+/// </summary>
+internal sealed class PendingBedrockHandler : HttpMessageHandler
+{
+    public int CallCount { get; private set; }
+
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        CallCount++;
+        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        throw new InvalidOperationException("Unreachable: the request should have been cancelled.");
+    }
+}
+
 /// <summary>Supplies the SDK a client bound to a fake handler; never caches or disposes it.</summary>
 internal sealed class FakeBedrockHttpClientFactory : Amazon.Runtime.HttpClientFactory
 {
@@ -171,7 +189,8 @@ internal static class FakeBedrock
     /// on <see cref="IDisposable.Dispose"/>; the production invoker never disposes
     /// an externally injected client, so test ownership lives here.
     /// </summary>
-    public static BedrockInvokerHarness Sut(HttpMessageHandler handler) => new(handler);
+    public static BedrockInvokerHarness Sut(HttpMessageHandler handler, int timeoutSeconds = 30) =>
+        new(handler, timeoutSeconds);
 }
 
 /// <summary>
@@ -184,11 +203,11 @@ internal sealed class BedrockInvokerHarness : IDisposable
 {
     private readonly AmazonBedrockAgentRuntimeClient _client;
 
-    public BedrockInvokerHarness(HttpMessageHandler handler)
+    public BedrockInvokerHarness(HttpMessageHandler handler, int timeoutSeconds = 30)
     {
         _client = FakeBedrock.Client(handler);
         Invoker = new BedrockRerankInvoker(
-            _client, FakeBedrock.Options(), NullLogger<BedrockRerankInvoker>.Instance);
+            _client, FakeBedrock.Options(timeoutSeconds: timeoutSeconds), NullLogger<BedrockRerankInvoker>.Instance);
     }
 
     /// <summary>The system under test.</summary>

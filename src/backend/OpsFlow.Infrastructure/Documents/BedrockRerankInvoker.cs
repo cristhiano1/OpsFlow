@@ -24,12 +24,15 @@ internal sealed partial class BedrockRerankInvoker : IBedrockRerankInvoker, IDis
     private readonly bool _ownsClient;
     private readonly string _modelArn;
     private readonly string _modelId;
+    private readonly TimeSpan _requestTimeout;
     private readonly ILogger<BedrockRerankInvoker> _logger;
 
     /// <summary>
     /// Production constructor. Builds an <see cref="AmazonBedrockAgentRuntimeClient"/>
-    /// from the configured region and timeout, relying on the AWS default
-    /// credential chain. This invoker owns and disposes that client.
+    /// for the configured region, relying on the AWS default credential chain. The
+    /// per-request timeout is enforced in <see cref="RerankAsync"/> with a linked
+    /// cancellation token, because the AWS SDK client timeout does not bound async
+    /// operations. This invoker owns and disposes that client.
     /// </summary>
     public BedrockRerankInvoker(
         IOptions<BedrockRerankerOptions> options,
@@ -41,12 +44,15 @@ internal sealed partial class BedrockRerankInvoker : IBedrockRerankInvoker, IDis
         var value = options.Value;
         _modelId = value.ModelId;
         _modelArn = BuildModelArn(value.Region, value.ModelId);
+        _requestTimeout = TimeSpan.FromSeconds(value.TimeoutSeconds);
         _logger = logger;
 
+        // AmazonBedrockAgentRuntimeConfig.Timeout does not bound async SDK calls,
+        // so it is intentionally not set here; the per-request timeout is applied
+        // via a linked cancellation token in RerankAsync instead.
         var config = new AmazonBedrockAgentRuntimeConfig
         {
             RegionEndpoint = RegionEndpoint.GetBySystemName(value.Region),
-            Timeout = TimeSpan.FromSeconds(value.TimeoutSeconds),
         };
 
         // No credentials are passed: the client resolves them from the AWS
@@ -74,6 +80,7 @@ internal sealed partial class BedrockRerankInvoker : IBedrockRerankInvoker, IDis
         _ownsClient = false;
         _modelId = value.ModelId;
         _modelArn = BuildModelArn(value.Region, value.ModelId);
+        _requestTimeout = TimeSpan.FromSeconds(value.TimeoutSeconds);
         _logger = logger;
     }
 
@@ -92,28 +99,41 @@ internal sealed partial class BedrockRerankInvoker : IBedrockRerankInvoker, IDis
 
         var request = BuildRequest(query, documents);
 
+        // Enforce the configured per-request timeout with a linked token, since
+        // AmazonBedrockAgentRuntimeConfig.Timeout does not bound async SDK calls.
+        // The original caller token stays authoritative when classifying caller
+        // cancellation versus a local timeout below.
+        using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        requestCts.CancelAfter(_requestTimeout);
+
         var stopwatch = Stopwatch.StartNew();
         RerankResponse response;
         try
         {
-            response = await _client.RerankAsync(request, cancellationToken);
+            response = await _client.RerankAsync(request, requestCts.Token);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // Only caller-requested cancellation propagates unchanged. A
-            // provider-local timeout that surfaces as OperationCanceledException
-            // or TaskCanceledException while the caller's token is NOT cancelled
-            // falls through to the generic handler and is wrapped as a reranker
-            // failure.
+            // Caller-requested cancellation propagates unchanged. Checked first so
+            // caller cancellation always wins over the linked local timeout.
             throw;
+        }
+        catch (OperationCanceledException ex) when (requestCts.IsCancellationRequested)
+        {
+            // The configured per-request timeout fired while the caller's token
+            // was NOT cancelled: a reranker failure, not caller cancellation.
+            LogRerankFailed(ex, _modelId);
+            throw new ChunkRerankingException(
+                "The Bedrock reranker timed out while scoring the candidates.", ex);
         }
         catch (Exception ex)
         {
             // Covers AmazonServiceException (access denied, validation, resource
             // not found, throttling, quota, service 5xx), AmazonClientException
-            // (network/SDK), HttpRequestException, and provider-local timeout.
-            // The message is categorical and carries no query text, candidate
-            // text, request payload, or credentials.
+            // (network/SDK), HttpRequestException, and any provider-local
+            // cancellation not tied to the caller token or the local timeout. The
+            // message is categorical and carries no query text, candidate text,
+            // request payload, or credentials.
             LogRerankFailed(ex, _modelId);
             throw new ChunkRerankingException(
                 "The Bedrock reranker failed to score the candidates.", ex);
