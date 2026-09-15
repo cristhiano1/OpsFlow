@@ -24,6 +24,10 @@
     <PackageVersion Include="OpenAI" Version="2.13.0" />
   </ItemGroup>
 
+  <ItemGroup Label="AI / Reranking">
+    <PackageVersion Include="AWSSDK.BedrockAgentRuntime" Version="4.0.102.6" />
+  </ItemGroup>
+
   <ItemGroup Label="Testing">
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
     <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.10" />

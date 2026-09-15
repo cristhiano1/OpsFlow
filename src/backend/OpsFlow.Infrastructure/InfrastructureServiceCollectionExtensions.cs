@@ -61,6 +61,7 @@ public static class InfrastructureServiceCollectionExtensions
 
         AddEmbeddingProvider(services, configuration);
         AddAnswerGenerationProvider(services, configuration);
+        AddRerankingProvider(services, configuration);
         AddAuthenticationFoundation(services, configuration);
 
         return services;
@@ -83,6 +84,24 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddOptions<OpenAIAnswerGenerationOptions>()
             .Bind(configuration.GetSection(OpenAIAnswerGenerationOptions.SectionName));
         services.AddSingleton<IGroundedAnswerGenerator, OpenAiGroundedAnswerGenerator>();
+    }
+
+    // Internal so the infrastructure unit tests can exercise it without
+    // requiring a full DbContext + JWT composition. Registers the production
+    // Amazon Bedrock reranker behind the provider-neutral IChunkReranker port.
+    // It intentionally does NOT register SearchDocumentChunksRerankedService:
+    // reranking is not activated in any user-facing path in this PR.
+    internal static void AddRerankingProvider(IServiceCollection services, IConfiguration configuration)
+    {
+        services.AddOptions<BedrockRerankerOptions>()
+            .Bind(configuration.GetSection(BedrockRerankerOptions.SectionName))
+            .ValidateOnStart();
+        services.AddSingleton<IValidateOptions<BedrockRerankerOptions>, BedrockRerankerOptionsValidator>();
+
+        // Stateless adapters over a thread-safe AWS client; safe as singletons.
+        // The invoker owns and disposes the AWS client for the process lifetime.
+        services.AddSingleton<IBedrockRerankInvoker, BedrockRerankInvoker>();
+        services.AddSingleton<IChunkReranker, BedrockChunkReranker>();
     }
 
     private static void AddAuthenticationFoundation(IServiceCollection services, IConfiguration configuration)
