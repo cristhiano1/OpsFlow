@@ -56,16 +56,26 @@ builder.Services.AddScoped<SearchDocumentChunksRerankedService>();
 // policy. Default OFF: reranking is not activated in the grounded-answer path
 // until deliberately enabled (see ADR-011). The hybrid /search endpoint and the
 // standalone reranked service are unaffected by this flag.
-var activateRerankingInAnswerPath =
-    builder.Configuration.GetValue<bool>("Reranking:ActivateInAnswerPath");
-var answerRetrievalPolicy = activateRerankingInAnswerPath
-    ? AnswerRetrievalPolicy.RerankWithHybridFallback
-    : AnswerRetrievalPolicy.HybridOnly;
-builder.Services.AddScoped(serviceProvider => new AnswerProjectQuestionService(
-    serviceProvider.GetRequiredService<SearchDocumentChunksHybridService>(),
-    serviceProvider.GetRequiredService<SearchDocumentChunksRerankedService>(),
-    serviceProvider.GetRequiredService<IGroundedAnswerGenerator>(),
-    answerRetrievalPolicy));
+//
+// The flag is read when the scoped service is resolved, not captured eagerly at
+// startup, so the effective configuration is honored — including host
+// configuration sources applied after these top-level statements run (e.g. a
+// test host overriding the flag). The mapping stays in the API composition root;
+// the Application layer receives only the enum and never depends on IConfiguration.
+builder.Services.AddScoped(serviceProvider =>
+{
+    var configuration = serviceProvider.GetRequiredService<IConfiguration>();
+    var answerRetrievalPolicy =
+        configuration.GetValue<bool>("Reranking:ActivateInAnswerPath")
+            ? AnswerRetrievalPolicy.RerankWithHybridFallback
+            : AnswerRetrievalPolicy.HybridOnly;
+
+    return new AnswerProjectQuestionService(
+        serviceProvider.GetRequiredService<SearchDocumentChunksHybridService>(),
+        serviceProvider.GetRequiredService<SearchDocumentChunksRerankedService>(),
+        serviceProvider.GetRequiredService<IGroundedAnswerGenerator>(),
+        answerRetrievalPolicy);
+});
 
 var app = builder.Build();
 
