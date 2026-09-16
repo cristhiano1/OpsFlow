@@ -11,7 +11,7 @@ namespace OpsFlow.Api.Projects;
 [ApiController]
 [Route("api/v1/projects/{projectId:guid}/answer")]
 [Authorize]
-public sealed class ProjectAnswerController : ControllerBase
+public sealed partial class ProjectAnswerController : ControllerBase
 {
     private const int MaxQuestionLength = 2500;
 
@@ -107,6 +107,30 @@ public sealed class ProjectAnswerController : ControllerBase
             Response.StatusCode = StatusCodes.Status502BadGateway;
             return new EmptyResult();
         }
+        catch (ChunkRerankingValidationException ex)
+        {
+            // Untrusted/malformed reranker output — a provider contract violation.
+            // Fail closed: never silently fall back on it.
+            logger.LogError(
+                ex,
+                "Reranker output contract violation for Project {ProjectId}, Organization {OrganizationId}",
+                projectId,
+                organizationId);
+            Response.StatusCode = StatusCodes.Status502BadGateway;
+            return new EmptyResult();
+        }
+        catch (ChunkRerankingException ex)
+        {
+            // Operational reranker failure. In the activated answer path this is
+            // normally consumed by hybrid fallback; this is a defensive boundary.
+            logger.LogError(
+                ex,
+                "Reranker provider failure for Project {ProjectId}, Organization {OrganizationId}",
+                projectId,
+                organizationId);
+            Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            return new EmptyResult();
+        }
         catch (Exception ex)
         {
             logger.LogError(
@@ -117,6 +141,10 @@ public sealed class ProjectAnswerController : ControllerBase
             Response.StatusCode = StatusCodes.Status500InternalServerError;
             return new EmptyResult();
         }
+
+        // Provider-neutral observability: which retrieval path produced the
+        // evidence. No query/answer/provider/model detail is logged.
+        LogRetrievalMode(logger, result.RetrievalMode, projectId, organizationId);
 
         switch (result.Status)
         {
@@ -147,6 +175,15 @@ public sealed class ProjectAnswerController : ControllerBase
                 return new EmptyResult();
         }
     }
+
+    [LoggerMessage(
+        Level = LogLevel.Information,
+        Message = "Answer retrieval mode {RetrievalMode} for Project {ProjectId}, Organization {OrganizationId}")]
+    private static partial void LogRetrievalMode(
+        ILogger logger,
+        AnswerRetrievalMode retrievalMode,
+        Guid projectId,
+        Guid organizationId);
 
     private bool TryGetOrganizationId(out Guid organizationId)
     {

@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Data.SqlTypes;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using OpsFlow.Api.IntegrationTests.Authentication;
@@ -68,14 +69,16 @@ public sealed class AnswerEndpointTests : IDisposable
     private static string AnswerPath(Guid projectId) =>
         $"/api/v1/projects/{projectId}/answer";
 
-    private async Task<string> LoginAsync(string email)
+    private Task<string> LoginAsync(string email) => LoginClientAsync(_client, email);
+
+    private static async Task<string> LoginClientAsync(HttpClient client, string email)
     {
         var json = JsonSerializer.Serialize(new { email, password = DefaultPassword });
         using var msg = new HttpRequestMessage(HttpMethod.Post, LoginPath)
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
-        using var response = await _client.SendAsync(msg);
+        using var response = await client.SendAsync(msg);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<LoginResponse>();
         Assert.NotNull(body);
@@ -654,8 +657,299 @@ public sealed class AnswerEndpointTests : IDisposable
     }
 
     // ================================================================
+    // Reranking activation (config-gated; fake reranker => no AWS in CI)
+    // ================================================================
+
+    // Builds a factory with reranking ACTIVATED in the answer path and the given
+    // fake IChunkReranker registered in place of the production Bedrock adapter.
+    // Because the fake makes no network call and the production adapter is removed,
+    // this path performs zero AWS activity in normal CI.
+    private WebApplicationFactory<Program> CreateRerankingFactory(IChunkReranker reranker) =>
+        _baseFactory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, config) =>
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Reranking:ActivateInAnswerPath"] = "true",
+                }));
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IEmbeddingGenerator>();
+                services.AddSingleton<IEmbeddingGenerator>(_fakeEmbedding);
+                services.RemoveAll<IGroundedAnswerGenerator>();
+                services.AddSingleton<IGroundedAnswerGenerator>(_fakeAnswer);
+                services.RemoveAll<IChunkReranker>();
+                services.AddSingleton<IChunkReranker>(reranker);
+            });
+        });
+
+    [Fact]
+    public async Task Answer_reranking_enabled_uses_fake_reranker_order_no_aws()
+    {
+        var reranker = new TestChunkReranker();
+        using var factory = CreateRerankingFactory(reranker);
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost"),
+            HandleCookies = false,
+            AllowAutoRedirect = false,
+        });
+
+        using var scope = factory.Services.CreateScope();
+        var org = await AuthenticationTestHost.SeedOrganizationAsync(scope.ServiceProvider);
+        var user = await AuthenticationTestHost.SeedUserAsync(
+            scope.ServiceProvider, org.Id, DefaultPassword, role: "Coordinator");
+        var token = await LoginClientAsync(client, user.Email!);
+        var projectId = await SeedProjectAsync(scope.ServiceProvider, org.Id);
+
+        var chunkIds = await SeedDocumentWithChunksAsync(
+            scope.ServiceProvider, org.Id, projectId,
+            ["machine learning algorithms optimize training", "quantum computing research advances"],
+            vectorFactory: i => i == 0 ? MakeAlignedVector() : MakeOrthogonalVector());
+        await WaitForFullTextPopulationAsync();
+
+        // Reranker promotes the second chunk above the (hybrid-first) first chunk.
+        reranker.ScoreSelector = request =>
+            [.. request.Candidates.Select(c =>
+                new ChunkRerankScore(c.DocumentChunkId, c.DocumentChunkId == chunkIds[1] ? 2.0 : 1.0))];
+        _fakeAnswer.Output = new GroundedAnswerGenerationOutput(
+            GeneratedAnswerStatus.Answered, "Answer.", [1, 2]);
+
+        using var response = await client.SendAsync(
+            BuildAnswerRequest(token, projectId, new { question = "machine learning algorithms" }));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var result = await response.Content.ReadFromJsonAsync<AnswerProjectQuestionResponse>();
+        Assert.NotNull(result);
+        Assert.Equal("answered", result.Status);
+        // Reranked order (chunk1 first) drove the evidence and citations.
+        Assert.Equal(chunkIds[1], result.Citations[0].DocumentChunkId);
+        Assert.Equal(chunkIds[0], result.Citations[1].DocumentChunkId);
+        Assert.True(reranker.CallCount >= 1, "the fake reranker must have been used");
+        Assert.Equal(1, _fakeAnswer.CallCount);
+    }
+
+    [Fact]
+    public async Task Answer_reranking_enabled_operational_failure_falls_back_to_hybrid()
+    {
+        var reranker = new TestChunkReranker
+        {
+            ExceptionToThrow = new ChunkRerankingException("provider unavailable"),
+        };
+        using var factory = CreateRerankingFactory(reranker);
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost"),
+            HandleCookies = false,
+            AllowAutoRedirect = false,
+        });
+
+        using var scope = factory.Services.CreateScope();
+        var org = await AuthenticationTestHost.SeedOrganizationAsync(scope.ServiceProvider);
+        var user = await AuthenticationTestHost.SeedUserAsync(
+            scope.ServiceProvider, org.Id, DefaultPassword, role: "Coordinator");
+        var token = await LoginClientAsync(client, user.Email!);
+        var projectId = await SeedProjectAsync(scope.ServiceProvider, org.Id);
+
+        var chunkIds = await SeedDocumentWithChunksAsync(
+            scope.ServiceProvider, org.Id, projectId,
+            ["machine learning algorithms optimize training"]);
+        await WaitForFullTextPopulationAsync();
+
+        _fakeAnswer.Output = new GroundedAnswerGenerationOutput(
+            GeneratedAnswerStatus.Answered, "Answer.", [1]);
+
+        using var response = await client.SendAsync(
+            BuildAnswerRequest(token, projectId, new { question = "machine learning algorithms" }));
+
+        // Operational reranker failure is absorbed by hybrid fallback: still 200.
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = await response.Content.ReadFromJsonAsync<AnswerProjectQuestionResponse>();
+        Assert.NotNull(result);
+        Assert.Equal("answered", result.Status);
+        Assert.Equal(chunkIds[0], Assert.Single(result.Citations).DocumentChunkId);
+        Assert.Equal(1, reranker.CallCount);
+        Assert.Equal(1, _fakeAnswer.CallCount);
+    }
+
+    [Fact]
+    public async Task Answer_reranking_enabled_malformed_output_returns_502_without_fallback()
+    {
+        var reranker = new TestChunkReranker
+        {
+            ExceptionToThrow = new ChunkRerankingValidationException("malformed provider output"),
+        };
+        using var factory = CreateRerankingFactory(reranker);
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost"),
+            HandleCookies = false,
+            AllowAutoRedirect = false,
+        });
+
+        using var scope = factory.Services.CreateScope();
+        var org = await AuthenticationTestHost.SeedOrganizationAsync(scope.ServiceProvider);
+        var user = await AuthenticationTestHost.SeedUserAsync(
+            scope.ServiceProvider, org.Id, DefaultPassword, role: "Coordinator");
+        var token = await LoginClientAsync(client, user.Email!);
+        var projectId = await SeedProjectAsync(scope.ServiceProvider, org.Id);
+
+        await SeedDocumentWithChunksAsync(
+            scope.ServiceProvider, org.Id, projectId,
+            ["machine learning algorithms optimize training"]);
+        await WaitForFullTextPopulationAsync();
+
+        using var response = await client.SendAsync(
+            BuildAnswerRequest(token, projectId, new { question = "machine learning algorithms" }));
+
+        // Untrusted reranker output fails closed: 502, no hybrid fallback, no answer.
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        Assert.Equal(1, reranker.CallCount);
+        Assert.Equal(0, _fakeAnswer.CallCount);
+    }
+
+    [Fact]
+    public async Task Answer_reranking_disabled_by_default_succeeds_without_reranker()
+    {
+        // The default class factory has ActivateInAnswerPath unset (false), so the
+        // answer path is hybrid-only and never resolves IChunkReranker — no AWS.
+        using var scope = _factory.Services.CreateScope();
+        var org = await AuthenticationTestHost.SeedOrganizationAsync(scope.ServiceProvider);
+        var user = await AuthenticationTestHost.SeedUserAsync(
+            scope.ServiceProvider, org.Id, DefaultPassword, role: "Coordinator");
+        var token = await LoginAsync(user.Email!);
+        var projectId = await SeedProjectAsync(scope.ServiceProvider, org.Id);
+
+        var chunkIds = await SeedDocumentWithChunksAsync(
+            scope.ServiceProvider, org.Id, projectId,
+            ["machine learning algorithms optimize training"]);
+        await WaitForFullTextPopulationAsync();
+
+        _fakeAnswer.Output = new GroundedAnswerGenerationOutput(
+            GeneratedAnswerStatus.Answered, "Answer.", [1]);
+
+        using var response = await _client.SendAsync(
+            BuildAnswerRequest(token, projectId, new { question = "machine learning algorithms" }));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = await response.Content.ReadFromJsonAsync<AnswerProjectQuestionResponse>();
+        Assert.NotNull(result);
+        Assert.Equal(chunkIds[0], Assert.Single(result.Citations).DocumentChunkId);
+    }
+
+    [Fact]
+    public void Di_resolves_answer_and_reranked_services_with_reranking_enabled()
+    {
+        var reranker = new TestChunkReranker();
+        using var factory = CreateRerankingFactory(reranker);
+        using var scope = factory.Services.CreateScope();
+
+        // The full graph resolves under the activated policy; the fake reranker
+        // (not the production Bedrock adapter) is what gets injected in this host.
+        Assert.NotNull(scope.ServiceProvider.GetService<AnswerProjectQuestionService>());
+        Assert.NotNull(scope.ServiceProvider.GetService<SearchDocumentChunksRerankedService>());
+        Assert.Same(reranker, scope.ServiceProvider.GetService<IChunkReranker>());
+    }
+
+    [Fact]
+    public async Task Answer_default_off_does_not_construct_or_invoke_reranker_provider()
+    {
+        // Default OFF: the reranking flag is intentionally NOT set. The IChunkReranker
+        // is registered through a DI factory that records construction, so we can
+        // prove the reranker/provider graph (Bedrock adapter + AWS client) is never
+        // resolved on the default hybrid answer path — independently of whether AWS
+        // is reachable. Under the default policy the reranked service is supplied to
+        // the answer service as an uninvoked factory, so nothing downstream is built.
+        var reranker = new TestChunkReranker();
+        var providerConstructionCount = 0;
+        using var factory = _baseFactory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IEmbeddingGenerator>();
+                services.AddSingleton<IEmbeddingGenerator>(_fakeEmbedding);
+                services.RemoveAll<IGroundedAnswerGenerator>();
+                services.AddSingleton<IGroundedAnswerGenerator>(_fakeAnswer);
+                services.RemoveAll<IChunkReranker>();
+                services.AddSingleton<IChunkReranker>(_ =>
+                {
+                    providerConstructionCount++;
+                    return reranker;
+                });
+            });
+        });
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost"),
+            HandleCookies = false,
+            AllowAutoRedirect = false,
+        });
+
+        using var scope = factory.Services.CreateScope();
+        var org = await AuthenticationTestHost.SeedOrganizationAsync(scope.ServiceProvider);
+        var user = await AuthenticationTestHost.SeedUserAsync(
+            scope.ServiceProvider, org.Id, DefaultPassword, role: "Coordinator");
+        var token = await LoginClientAsync(client, user.Email!);
+        var projectId = await SeedProjectAsync(scope.ServiceProvider, org.Id);
+
+        var chunkIds = await SeedDocumentWithChunksAsync(
+            scope.ServiceProvider, org.Id, projectId,
+            ["machine learning algorithms optimize training"]);
+        await WaitForFullTextPopulationAsync();
+
+        _fakeAnswer.Output = new GroundedAnswerGenerationOutput(
+            GeneratedAnswerStatus.Answered, "Answer.", [1]);
+
+        using var response = await client.SendAsync(
+            BuildAnswerRequest(token, projectId, new { question = "machine learning algorithms" }));
+
+        // The default hybrid path answers successfully...
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = await response.Content.ReadFromJsonAsync<AnswerProjectQuestionResponse>();
+        Assert.NotNull(result);
+        Assert.Equal("answered", result.Status);
+        Assert.Equal(chunkIds[0], Assert.Single(result.Citations).DocumentChunkId);
+
+        // ...without ever resolving/constructing or invoking the reranker provider.
+        Assert.Equal(0, providerConstructionCount);
+        Assert.Equal(0, reranker.CallCount);
+    }
+
+    // ================================================================
     // Test fakes
     // ================================================================
+
+    private sealed class TestChunkReranker : IChunkReranker
+    {
+        public RerankerIdentity Identity { get; set; } = new("test-rerank-v1", "test-model", 50);
+
+        public int CallCount { get; private set; }
+
+        public Exception? ExceptionToThrow { get; set; }
+
+        public Func<ChunkRerankRequest, IReadOnlyList<ChunkRerankScore>>? ScoreSelector { get; set; }
+
+        public Task<IReadOnlyList<ChunkRerankScore>> RerankAsync(
+            ChunkRerankRequest request,
+            CancellationToken cancellationToken)
+        {
+            CallCount++;
+
+            if (ExceptionToThrow is not null)
+            {
+                throw ExceptionToThrow;
+            }
+
+            if (ScoreSelector is not null)
+            {
+                return Task.FromResult(ScoreSelector(request));
+            }
+
+            IReadOnlyList<ChunkRerankScore> result =
+                [.. request.Candidates.Select((c, i) =>
+                    new ChunkRerankScore(c.DocumentChunkId, request.Candidates.Count - i))];
+            return Task.FromResult(result);
+        }
+    }
 
     private sealed class TestEmbeddingGenerator : IEmbeddingGenerator
     {

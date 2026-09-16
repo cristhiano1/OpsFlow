@@ -131,22 +131,24 @@ public sealed class BedrockChunkRerankerTests
     }
 
     [Fact]
-    public async Task Rejects_negative_result_index()
+    public async Task Rejects_negative_result_index_as_validation()
     {
+        // An un-correlatable index is malformed/untrusted output, not an
+        // operational failure: it must fail closed (never a fallback).
         var invoker = new FakeInvoker((_, _) => [new BedrockRerankResult(-1, 0.5)]);
         var sut = new BedrockChunkReranker(invoker, Options());
 
-        await Assert.ThrowsAsync<ChunkRerankingException>(() =>
+        await Assert.ThrowsAsync<ChunkRerankingValidationException>(() =>
             sut.RerankAsync(Request((Guid.NewGuid(), "a")), CancellationToken.None));
     }
 
     [Fact]
-    public async Task Rejects_upper_out_of_range_result_index()
+    public async Task Rejects_upper_out_of_range_result_index_as_validation()
     {
         var invoker = new FakeInvoker((_, _) => [new BedrockRerankResult(5, 0.5)]);
         var sut = new BedrockChunkReranker(invoker, Options());
 
-        await Assert.ThrowsAsync<ChunkRerankingException>(() =>
+        await Assert.ThrowsAsync<ChunkRerankingValidationException>(() =>
             sut.RerankAsync(Request((Guid.NewGuid(), "a"), (Guid.NewGuid(), "b")), CancellationToken.None));
     }
 

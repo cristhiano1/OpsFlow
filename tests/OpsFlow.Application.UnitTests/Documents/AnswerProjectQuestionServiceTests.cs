@@ -22,9 +22,36 @@ public sealed class AnswerProjectQuestionServiceTests
         var semantic = new FakeSemanticChunkRetriever();
         var lexical = new FakeLexicalChunkRetriever();
         var hybrid = new SearchDocumentChunksHybridService(projects, embedding, semantic, lexical);
+        // Under HybridOnly the reranked service is never invoked, but the answer
+        // service still requires the dependency; supply a never-called fake.
+        var reranked = new SearchDocumentChunksRerankedService(hybrid, new FakeChunkReranker());
         var answerGen = new FakeGroundedAnswerGenerator();
-        var service = new AnswerProjectQuestionService(hybrid, answerGen);
+        var service = new AnswerProjectQuestionService(
+            hybrid, () => reranked, answerGen, AnswerRetrievalPolicy.HybridOnly);
         return (service, projects, embedding, semantic, lexical, answerGen);
+    }
+
+    // Builds the answer service with the reranked path active (or the given
+    // policy), exposing the reranked service's fake reranker for assertions.
+    private static (
+        AnswerProjectQuestionService Service,
+        FakeProjectRepository Projects,
+        FakeSemanticChunkRetriever Semantic,
+        FakeLexicalChunkRetriever Lexical,
+        FakeGroundedAnswerGenerator AnswerGen,
+        FakeChunkReranker Reranker)
+        CreateRerankingService(AnswerRetrievalPolicy policy = AnswerRetrievalPolicy.RerankWithHybridFallback)
+    {
+        var projects = new FakeProjectRepository();
+        var embedding = new FakeEmbeddingGenerator();
+        var semantic = new FakeSemanticChunkRetriever();
+        var lexical = new FakeLexicalChunkRetriever();
+        var hybrid = new SearchDocumentChunksHybridService(projects, embedding, semantic, lexical);
+        var reranker = new FakeChunkReranker();
+        var reranked = new SearchDocumentChunksRerankedService(hybrid, reranker);
+        var answerGen = new FakeGroundedAnswerGenerator();
+        var service = new AnswerProjectQuestionService(hybrid, () => reranked, answerGen, policy);
+        return (service, projects, semantic, lexical, answerGen, reranker);
     }
 
     private static AnswerProjectQuestionQuery MakeQuery(
@@ -57,23 +84,38 @@ public sealed class AnswerProjectQuestionServiceTests
     // Constructor guards
     // ================================================================
 
+    private static SearchDocumentChunksHybridService NewHybrid() =>
+        new(new FakeProjectRepository(), new FakeEmbeddingGenerator(),
+            new FakeSemanticChunkRetriever(), new FakeLexicalChunkRetriever());
+
     [Fact]
     public void Constructor_rejects_null_hybrid_service()
     {
+        var reranked = new SearchDocumentChunksRerankedService(NewHybrid(), new FakeChunkReranker());
         Assert.Throws<ArgumentNullException>(() =>
-            new AnswerProjectQuestionService(null!, new FakeGroundedAnswerGenerator()));
+            new AnswerProjectQuestionService(
+                null!, () => reranked, new FakeGroundedAnswerGenerator(), AnswerRetrievalPolicy.HybridOnly));
+    }
+
+    [Fact]
+    public void Constructor_rejects_null_reranked_service_factory()
+    {
+        Assert.Throws<ArgumentNullException>(() =>
+            new AnswerProjectQuestionService(
+                NewHybrid(),
+                null!,
+                new FakeGroundedAnswerGenerator(),
+                AnswerRetrievalPolicy.HybridOnly));
     }
 
     [Fact]
     public void Constructor_rejects_null_answer_generator()
     {
-        var projects = new FakeProjectRepository();
-        var hybrid = new SearchDocumentChunksHybridService(
-            projects, new FakeEmbeddingGenerator(),
-            new FakeSemanticChunkRetriever(), new FakeLexicalChunkRetriever());
+        var hybrid = NewHybrid();
+        var reranked = new SearchDocumentChunksRerankedService(hybrid, new FakeChunkReranker());
 
         Assert.Throws<ArgumentNullException>(() =>
-            new AnswerProjectQuestionService(hybrid, null!));
+            new AnswerProjectQuestionService(hybrid, () => reranked, null!, AnswerRetrievalPolicy.HybridOnly));
     }
 
     // ================================================================
@@ -1061,6 +1103,200 @@ public sealed class AnswerProjectQuestionServiceTests
         var ex = await Assert.ThrowsAsync<AnswerGenerationException>(() =>
             service.AnswerAsync(MakeQuery(), CancellationToken.None));
         Assert.Equal("provider is down", ex.Message);
+    }
+
+    // ================================================================
+    // Reranking activation (policy, modes, fail-open / fail-closed)
+    // ================================================================
+
+    [Fact]
+    public async Task Answer_hybrid_only_policy_does_not_invoke_reranker()
+    {
+        var (service, projects, semantic, _, answerGen, reranker) =
+            CreateRerankingService(AnswerRetrievalPolicy.HybridOnly);
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit(text: "hybrid evidence")];
+        answerGen.Output = Answered("Grounded.", 1);
+
+        var result = await service.AnswerAsync(MakeQuery(), CancellationToken.None);
+
+        Assert.Equal(AnswerProjectQuestionStatus.Success, result.Status);
+        Assert.Equal(AnswerRetrievalMode.Hybrid, result.RetrievalMode);
+        Assert.Equal(0, reranker.CallCount);
+        Assert.Equal(1, answerGen.CallCount);
+    }
+
+    [Fact]
+    public async Task Answer_reranked_success_uses_reranked_order_and_reports_reranked_mode()
+    {
+        var (service, projects, semantic, _, answerGen, reranker) = CreateRerankingService();
+        projects.ExistsResult = true;
+        var alpha = MakeHit(text: "alpha");
+        var bravo = MakeHit(text: "bravo");
+        semantic.RetrieveResult = [alpha, bravo];
+        // Reranker promotes "bravo" above "alpha" (reverses hybrid order).
+        reranker.ScoreSelector = request =>
+            [.. request.Candidates.Select(c => new ChunkRerankScore(c.DocumentChunkId, c.Text == "bravo" ? 2.0 : 1.0))];
+        answerGen.Output = Answered("Answer.", 1, 2);
+
+        var result = await service.AnswerAsync(MakeQuery(), CancellationToken.None);
+
+        Assert.Equal(AnswerProjectQuestionStatus.Success, result.Status);
+        Assert.Equal(AnswerRetrievalMode.Reranked, result.RetrievalMode);
+        Assert.Equal(1, reranker.CallCount);
+        Assert.Equal(1, answerGen.CallCount);
+
+        // Reranked order (bravo, alpha) drives evidence order and citations.
+        var citations = result.Answer!.Citations;
+        Assert.Equal(bravo.DocumentChunkId, citations[0].DocumentChunkId);
+        Assert.Equal(alpha.DocumentChunkId, citations[1].DocumentChunkId);
+        var prompt = answerGen.LastRequest!.UserPrompt;
+        Assert.Contains("<evidence id=\"1\">\nbravo\n</evidence>", prompt, StringComparison.Ordinal);
+        Assert.Contains("<evidence id=\"2\">\nalpha\n</evidence>", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Answer_operational_reranker_failure_falls_back_to_hybrid()
+    {
+        var (service, projects, semantic, _, answerGen, reranker) = CreateRerankingService();
+        projects.ExistsResult = true;
+        var alpha = MakeHit(text: "alpha");
+        var bravo = MakeHit(text: "bravo");
+        semantic.RetrieveResult = [alpha, bravo];
+        reranker.ExceptionToThrow = new ChunkRerankingException("provider unavailable");
+        answerGen.Output = Answered("Answer.", 1, 2);
+
+        var result = await service.AnswerAsync(MakeQuery(), CancellationToken.None);
+
+        Assert.Equal(AnswerProjectQuestionStatus.Success, result.Status);
+        Assert.Equal(AnswerRetrievalMode.HybridFallback, result.RetrievalMode);
+        Assert.Equal(1, reranker.CallCount);
+        Assert.Equal(1, answerGen.CallCount);
+        // Hybrid order (alpha, bravo) supplied the evidence on fallback.
+        var citations = result.Answer!.Citations;
+        Assert.Equal(alpha.DocumentChunkId, citations[0].DocumentChunkId);
+        Assert.Equal(bravo.DocumentChunkId, citations[1].DocumentChunkId);
+    }
+
+    [Fact]
+    public async Task Answer_reranker_validation_failure_fails_closed_without_fallback_or_generation()
+    {
+        var (service, projects, semantic, _, answerGen, reranker) = CreateRerankingService();
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit(text: "alpha")];
+        reranker.ExceptionToThrow = new ChunkRerankingValidationException("malformed provider output");
+
+        await Assert.ThrowsAsync<ChunkRerankingValidationException>(() =>
+            service.AnswerAsync(MakeQuery(), CancellationToken.None));
+
+        Assert.Equal(0, answerGen.CallCount);
+    }
+
+    [Fact]
+    public async Task Answer_invalid_reranker_identity_fails_closed_without_fallback_or_generation()
+    {
+        var (service, projects, semantic, _, answerGen, reranker) = CreateRerankingService();
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit(text: "alpha")];
+        // Blank profile id => SearchDocumentChunksRerankedService.ValidateRerankerIdentity
+        // throws InvalidOperationException before the reranker is ever invoked.
+        reranker.Identity = new RerankerIdentity("", "test-model", 50);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.AnswerAsync(MakeQuery(), CancellationToken.None));
+
+        Assert.Equal(0, reranker.CallCount);
+        Assert.Equal(0, answerGen.CallCount);
+    }
+
+    [Fact]
+    public async Task Answer_reranked_path_propagates_caller_cancellation_without_fallback()
+    {
+        var (service, projects, semantic, _, answerGen, reranker) = CreateRerankingService();
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit(text: "alpha")];
+
+        using var cts = new CancellationTokenSource();
+        // Cancel exactly when the reranker runs, then surface cancellation. Because
+        // the caller token is cancelled, this must propagate — never be wrapped or
+        // trigger a hybrid fallback.
+        reranker.OnRerank = cts.Cancel;
+        reranker.ExceptionToThrow = new OperationCanceledException(cts.Token);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            service.AnswerAsync(MakeQuery(), cts.Token));
+
+        Assert.Equal(1, reranker.CallCount);
+        Assert.Equal(0, answerGen.CallCount);
+    }
+
+    [Fact]
+    public async Task Answer_reranked_project_not_found_returns_not_applicable_mode()
+    {
+        var (service, projects, _, _, answerGen, reranker) = CreateRerankingService();
+        projects.ExistsResult = false;
+
+        var result = await service.AnswerAsync(MakeQuery(), CancellationToken.None);
+
+        Assert.Equal(AnswerProjectQuestionStatus.ProjectNotFound, result.Status);
+        Assert.Equal(AnswerRetrievalMode.NotApplicable, result.RetrievalMode);
+        Assert.Equal(0, reranker.CallCount);
+        Assert.Equal(0, answerGen.CallCount);
+    }
+
+    [Fact]
+    public async Task Answer_reranked_zero_hits_returns_insufficient_not_applicable_without_reranker()
+    {
+        var (service, projects, _, _, answerGen, reranker) = CreateRerankingService();
+        projects.ExistsResult = true;
+        // Both retrievers empty => reranked service returns empty before scoring.
+
+        var result = await service.AnswerAsync(MakeQuery(), CancellationToken.None);
+
+        Assert.Equal(AnswerProjectQuestionStatus.InsufficientEvidence, result.Status);
+        Assert.Equal(AnswerRetrievalMode.NotApplicable, result.RetrievalMode);
+        Assert.Equal(0, reranker.CallCount);
+        Assert.Equal(0, answerGen.CallCount);
+    }
+
+    [Fact]
+    public async Task Answer_reranked_generator_insufficient_preserves_reranked_mode()
+    {
+        var (service, projects, semantic, _, answerGen, _) = CreateRerankingService();
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit(text: "alpha")];
+        answerGen.Output = Insufficient();
+
+        var result = await service.AnswerAsync(MakeQuery(), CancellationToken.None);
+
+        Assert.Equal(AnswerProjectQuestionStatus.InsufficientEvidence, result.Status);
+        // Evidence WAS supplied via the reranked path; the mode is preserved.
+        Assert.Equal(AnswerRetrievalMode.Reranked, result.RetrievalMode);
+        Assert.Equal(1, answerGen.CallCount);
+    }
+
+    [Fact]
+    public async Task Answer_reranked_citations_come_only_from_local_authoritative_metadata()
+    {
+        var (service, projects, semantic, _, answerGen, _) = CreateRerankingService();
+        projects.ExistsResult = true;
+        var docId = Guid.NewGuid();
+        var chunkId = Guid.NewGuid();
+        semantic.RetrieveResult = [new SemanticChunkHit(docId, chunkId, 7, 70, 75, "hello", 0.1)];
+        answerGen.Output = Answered("Grounded.", 1);
+
+        var result = await service.AnswerAsync(MakeQuery(), CancellationToken.None);
+
+        Assert.Equal(AnswerProjectQuestionStatus.Success, result.Status);
+        Assert.Equal(AnswerRetrievalMode.Reranked, result.RetrievalMode);
+        var citation = Assert.Single(result.Answer!.Citations);
+        // The reranker supplies only scores; all citation metadata is the local hit.
+        Assert.Equal(docId, citation.DocumentId);
+        Assert.Equal(chunkId, citation.DocumentChunkId);
+        Assert.Equal(7, citation.ChunkIndex);
+        Assert.Equal(70, citation.StartOffset);
+        Assert.Equal(75, citation.EndOffset);
+        Assert.Equal("hello", citation.Text);
     }
 
     // ================================================================

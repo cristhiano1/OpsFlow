@@ -51,18 +51,30 @@ public sealed partial class AnswerProjectQuestionService
         "- Never output database ids, chunk ids, character offsets, or ranking metadata; only the temporary integer evidence ids exist for you.";
 
     private readonly SearchDocumentChunksHybridService _hybridSearch;
+    private readonly Func<SearchDocumentChunksRerankedService> _rerankedSearchFactory;
     private readonly IGroundedAnswerGenerator _answerGenerator;
+    private readonly AnswerRetrievalPolicy _retrievalPolicy;
 
-    /// <summary>Creates the service with its dependencies.</summary>
+    /// <summary>
+    /// Creates the service with its dependencies and evidence-retrieval policy.
+    /// The reranked search is supplied as a factory so it is resolved only when the
+    /// policy actually reranks; under <see cref="AnswerRetrievalPolicy.HybridOnly"/>
+    /// the reranked dependency graph is never resolved or constructed.
+    /// </summary>
     public AnswerProjectQuestionService(
         SearchDocumentChunksHybridService hybridSearch,
-        IGroundedAnswerGenerator answerGenerator)
+        Func<SearchDocumentChunksRerankedService> rerankedSearchFactory,
+        IGroundedAnswerGenerator answerGenerator,
+        AnswerRetrievalPolicy retrievalPolicy)
     {
         ArgumentNullException.ThrowIfNull(hybridSearch);
+        ArgumentNullException.ThrowIfNull(rerankedSearchFactory);
         ArgumentNullException.ThrowIfNull(answerGenerator);
 
         _hybridSearch = hybridSearch;
+        _rerankedSearchFactory = rerankedSearchFactory;
         _answerGenerator = answerGenerator;
+        _retrievalPolicy = retrievalPolicy;
     }
 
     /// <summary>
@@ -76,34 +88,28 @@ public sealed partial class AnswerProjectQuestionService
     {
         ArgumentNullException.ThrowIfNull(query);
 
-        // Reuse hybrid retrieval. It performs all query-text validation
+        // Retrieve evidence per the configured policy. The underlying hybrid and
+        // reranked services perform all query-text validation
         // (null/whitespace/length/rune), organization scoping, and project
-        // existence — including the cross-tenant-indistinguishable
-        // ProjectNotFound semantics. The original question is forwarded
-        // unchanged as the query text.
-        var searchResult = await _hybridSearch.SearchAsync(
-            new SearchDocumentChunksHybridQuery(
-                query.OrganizationId,
-                query.ProjectId,
-                query.Question,
-                EvidenceTopK),
-            cancellationToken);
+        // existence — including the cross-tenant-indistinguishable ProjectNotFound
+        // semantics. The original question is forwarded unchanged.
+        var retrieval = await RetrieveEvidenceAsync(query, cancellationToken);
 
-        if (!searchResult.ProjectFound)
+        if (!retrieval.ProjectFound)
         {
             return AnswerProjectQuestionResult.ProjectNotFound();
         }
 
-        if (searchResult.Hits.Count == 0)
+        if (retrieval.Evidence.Count == 0)
         {
             // No evidence: never invoke the generator (cost + no unsupported
-            // hallucination).
-            return AnswerProjectQuestionResult.InsufficientEvidence();
+            // hallucination). No reranker scored answerable evidence.
+            return AnswerProjectQuestionResult.InsufficientEvidence(retrieval.Mode);
         }
 
-        EnsureNoDuplicateChunks(searchResult.Hits);
+        EnsureNoDuplicateChunks(retrieval.Evidence);
 
-        var selectedEvidence = SelectBoundedEvidence(searchResult.Hits);
+        var selectedEvidence = SelectBoundedEvidence(retrieval.Evidence);
 
         var userPrompt = BuildUserPrompt(query.Question, selectedEvidence);
 
@@ -116,32 +122,129 @@ public sealed partial class AnswerProjectQuestionService
 
         return output.Status switch
         {
-            GeneratedAnswerStatus.InsufficientEvidence => MapInsufficient(output),
-            GeneratedAnswerStatus.Answered => MapAnswered(output, selectedEvidence),
+            GeneratedAnswerStatus.InsufficientEvidence => MapInsufficient(output, retrieval.Mode),
+            GeneratedAnswerStatus.Answered => MapAnswered(output, selectedEvidence, retrieval.Mode),
             _ => throw new GroundedAnswerValidationException(
                 $"Generator returned an unrecognized status '{output.Status}'."),
         };
     }
 
-    private static void EnsureNoDuplicateChunks(IReadOnlyList<HybridChunkHit> hits)
+    // Retrieves evidence according to the policy, tracking the mode that actually
+    // supplied it. Fail-open applies ONLY to an operational
+    // ChunkRerankingException; malformed/untrusted output, configuration/invariant
+    // failures, and caller cancellation propagate (fail closed).
+    private async Task<EvidenceRetrieval> RetrieveEvidenceAsync(
+        AnswerProjectQuestionQuery query,
+        CancellationToken cancellationToken)
+    {
+        if (_retrievalPolicy == AnswerRetrievalPolicy.HybridOnly)
+        {
+            var hybridOnly = await SearchHybridAsync(query, cancellationToken);
+            return ToRetrieval(hybridOnly, AnswerRetrievalMode.Hybrid);
+        }
+
+        // Resolve the reranked search only here — on the reranking path — so the
+        // reranked and provider (reranker/AWS) graph is never resolved or
+        // constructed under HybridOnly.
+        var rerankedSearch = _rerankedSearchFactory();
+
+        SearchDocumentChunksRerankedResult reranked;
+        try
+        {
+            reranked = await rerankedSearch.SearchAsync(
+                new SearchDocumentChunksRerankedQuery(
+                    query.OrganizationId,
+                    query.ProjectId,
+                    query.Question,
+                    EvidenceTopK),
+                cancellationToken);
+        }
+        catch (ChunkRerankingException)
+        {
+            // Operational reranker unavailability ONLY (AWS/network/transport,
+            // configured timeout, capacity). Fall back to hybrid RRF. We do NOT
+            // catch ChunkRerankingValidationException (untrusted output),
+            // InvalidOperationException (identity/invariant), or
+            // OperationCanceledException (caller cancellation) — those fail closed.
+            var fallback = await SearchHybridAsync(query, cancellationToken);
+            return ToRetrieval(fallback, AnswerRetrievalMode.HybridFallback);
+        }
+
+        if (!reranked.ProjectFound)
+        {
+            return EvidenceRetrieval.NotFound;
+        }
+
+        if (reranked.Hits.Count == 0)
+        {
+            return EvidenceRetrieval.Empty;
+        }
+
+        var evidence = new List<EvidenceChunk>(reranked.Hits.Count);
+        foreach (var hit in reranked.Hits)
+        {
+            evidence.Add(new EvidenceChunk(
+                hit.DocumentId, hit.DocumentChunkId, hit.ChunkIndex, hit.StartOffset, hit.EndOffset, hit.Text));
+        }
+
+        return new EvidenceRetrieval(true, evidence, AnswerRetrievalMode.Reranked);
+    }
+
+    private async Task<SearchDocumentChunksHybridResult> SearchHybridAsync(
+        AnswerProjectQuestionQuery query,
+        CancellationToken cancellationToken) =>
+        await _hybridSearch.SearchAsync(
+            new SearchDocumentChunksHybridQuery(
+                query.OrganizationId,
+                query.ProjectId,
+                query.Question,
+                EvidenceTopK),
+            cancellationToken);
+
+    private static EvidenceRetrieval ToRetrieval(
+        SearchDocumentChunksHybridResult result,
+        AnswerRetrievalMode modeWhenEvidence)
+    {
+        if (!result.ProjectFound)
+        {
+            return EvidenceRetrieval.NotFound;
+        }
+
+        if (result.Hits.Count == 0)
+        {
+            return EvidenceRetrieval.Empty;
+        }
+
+        var evidence = new List<EvidenceChunk>(result.Hits.Count);
+        foreach (var hit in result.Hits)
+        {
+            evidence.Add(new EvidenceChunk(
+                hit.DocumentId, hit.DocumentChunkId, hit.ChunkIndex, hit.StartOffset, hit.EndOffset, hit.Text));
+        }
+
+        return new EvidenceRetrieval(true, evidence, modeWhenEvidence);
+    }
+
+    private static void EnsureNoDuplicateChunks(IReadOnlyList<EvidenceChunk> hits)
     {
         var seen = new HashSet<Guid>(hits.Count);
         foreach (var hit in hits)
         {
             if (!seen.Add(hit.DocumentChunkId))
             {
-                // Hybrid retrieval guarantees deduplication by DocumentChunkId;
-                // a duplicate here indicates an upstream invariant violation.
+                // Both hybrid and reranked retrieval guarantee deduplication by
+                // DocumentChunkId; a duplicate here indicates an upstream invariant
+                // violation. It fails closed (never a fallback).
                 throw new InvalidOperationException(
-                    $"Duplicate DocumentChunkId '{hit.DocumentChunkId}' in hybrid evidence; " +
+                    $"Duplicate DocumentChunkId '{hit.DocumentChunkId}' in evidence; " +
                     "citations would be ambiguous.");
             }
         }
     }
 
-    private static List<HybridChunkHit> SelectBoundedEvidence(IReadOnlyList<HybridChunkHit> hits)
+    private static List<EvidenceChunk> SelectBoundedEvidence(IReadOnlyList<EvidenceChunk> hits)
     {
-        var selected = new List<HybridChunkHit>(hits.Count);
+        var selected = new List<EvidenceChunk>(hits.Count);
         var totalChars = 0;
 
         foreach (var hit in hits)
@@ -169,7 +272,7 @@ public sealed partial class AnswerProjectQuestionService
         return selected;
     }
 
-    private static string BuildUserPrompt(string question, List<HybridChunkHit> selectedEvidence)
+    private static string BuildUserPrompt(string question, List<EvidenceChunk> selectedEvidence)
     {
         // Labels are 1-based and contiguous over the selected (ranked-prefix)
         // evidence. Only escaped text and the temporary integer label reach the
@@ -187,7 +290,9 @@ public sealed partial class AnswerProjectQuestionService
     // persisted chunk text (see MapAnswered).
     private static string Escape(string value) => SecurityElement.Escape(value) ?? string.Empty;
 
-    private static AnswerProjectQuestionResult MapInsufficient(GroundedAnswerGenerationOutput output)
+    private static AnswerProjectQuestionResult MapInsufficient(
+        GroundedAnswerGenerationOutput output,
+        AnswerRetrievalMode retrievalMode)
     {
         if (output.CitationNumbers is null)
         {
@@ -207,12 +312,14 @@ public sealed partial class AnswerProjectQuestionService
                 "Generator returned insufficient_evidence with a non-empty citations array.");
         }
 
-        return AnswerProjectQuestionResult.InsufficientEvidence();
+        // Evidence WAS supplied to the generator; preserve the mode that produced it.
+        return AnswerProjectQuestionResult.InsufficientEvidence(retrievalMode);
     }
 
     private static AnswerProjectQuestionResult MapAnswered(
         GroundedAnswerGenerationOutput output,
-        List<HybridChunkHit> selectedEvidence)
+        List<EvidenceChunk> selectedEvidence,
+        AnswerRetrievalMode retrievalMode)
     {
         if (output.CitationNumbers is null)
         {
@@ -287,7 +394,31 @@ public sealed partial class AnswerProjectQuestionService
                 hit.Text));
         }
 
-        return AnswerProjectQuestionResult.Success(new GroundedAnswer(output.Answer, citations));
+        return AnswerProjectQuestionResult.Success(new GroundedAnswer(output.Answer, citations), retrievalMode);
+    }
+
+    // Internal common projection over the authoritative fields shared by
+    // HybridChunkHit and RerankedChunkHit. The generator never authors these; they
+    // are the sole source of citation metadata regardless of retrieval path.
+    private readonly record struct EvidenceChunk(
+        Guid DocumentId,
+        Guid DocumentChunkId,
+        int ChunkIndex,
+        int StartOffset,
+        int EndOffset,
+        string Text);
+
+    // Outcome of evidence retrieval plus the provider-neutral mode that produced it.
+    private sealed record EvidenceRetrieval(
+        bool ProjectFound,
+        IReadOnlyList<EvidenceChunk> Evidence,
+        AnswerRetrievalMode Mode)
+    {
+        public static readonly EvidenceRetrieval NotFound =
+            new(false, [], AnswerRetrievalMode.NotApplicable);
+
+        public static readonly EvidenceRetrieval Empty =
+            new(true, [], AnswerRetrievalMode.NotApplicable);
     }
 
     // Rejection-only validator: detects citation-shaped bracket tokens in the
