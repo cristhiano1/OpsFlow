@@ -82,7 +82,10 @@ internal sealed class BedrockChunkReranker : IChunkReranker
         {
             if (result.Index < 0 || result.Index >= candidates.Count)
             {
-                throw new ChunkRerankingException(
+                // An index that cannot be correlated to a supplied candidate is a
+                // malformed/untrusted provider result, not an operational failure:
+                // fail closed so it never triggers an availability fallback.
+                throw new ChunkRerankingValidationException(
                     $"Bedrock returned an out-of-range result index {result.Index} for " +
                     $"{candidates.Count} candidates.");
             }

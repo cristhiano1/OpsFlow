@@ -50,7 +50,22 @@ builder.Services.AddScoped<SearchDocumentChunksService>();
 builder.Services.AddScoped<ILexicalChunkRetriever, EfLexicalChunkRetriever>();
 builder.Services.AddScoped<SearchDocumentChunksLexicallyService>();
 builder.Services.AddScoped<SearchDocumentChunksHybridService>();
-builder.Services.AddScoped<AnswerProjectQuestionService>();
+builder.Services.AddScoped<SearchDocumentChunksRerankedService>();
+
+// Map the non-secret configuration flag onto the provider-neutral Application
+// policy. Default OFF: reranking is not activated in the grounded-answer path
+// until deliberately enabled (see ADR-011). The hybrid /search endpoint and the
+// standalone reranked service are unaffected by this flag.
+var activateRerankingInAnswerPath =
+    builder.Configuration.GetValue<bool>("Reranking:ActivateInAnswerPath");
+var answerRetrievalPolicy = activateRerankingInAnswerPath
+    ? AnswerRetrievalPolicy.RerankWithHybridFallback
+    : AnswerRetrievalPolicy.HybridOnly;
+builder.Services.AddScoped(serviceProvider => new AnswerProjectQuestionService(
+    serviceProvider.GetRequiredService<SearchDocumentChunksHybridService>(),
+    serviceProvider.GetRequiredService<SearchDocumentChunksRerankedService>(),
+    serviceProvider.GetRequiredService<IGroundedAnswerGenerator>(),
+    answerRetrievalPolicy));
 
 var app = builder.Build();
 

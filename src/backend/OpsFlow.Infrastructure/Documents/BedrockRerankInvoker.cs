@@ -191,9 +191,13 @@ internal sealed partial class BedrockRerankInvoker : IBedrockRerankInvoker, IDis
 
     private static List<BedrockRerankResult> MapResults(RerankResponse response)
     {
+        // A malformed provider response is untrusted output, not an operational
+        // failure: it is reported as ChunkRerankingValidationException so callers
+        // (and the RAG fail-open policy) never treat it as mere unavailability and
+        // never fall back on it.
         if (response?.Results is null)
         {
-            throw new ChunkRerankingException("Bedrock returned no rerank results.");
+            throw new ChunkRerankingValidationException("Bedrock returned a null rerank result collection.");
         }
 
         var mapped = new List<BedrockRerankResult>(response.Results.Count);
@@ -203,7 +207,7 @@ internal sealed partial class BedrockRerankInvoker : IBedrockRerankInvoker, IDis
             {
                 // A result without an index or score cannot be correlated or
                 // scored. Fail closed rather than invent a value.
-                throw new ChunkRerankingException(
+                throw new ChunkRerankingValidationException(
                     "Bedrock returned a rerank result without an index or relevance score.");
             }
 

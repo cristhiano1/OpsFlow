@@ -82,21 +82,37 @@ public sealed class BedrockRerankInvokerTests
         Assert.Equal(0.25, results[1].RelevanceScore, 5);
     }
 
+    // Malformed provider responses are untrusted output, not operational failures:
+    // they surface as ChunkRerankingValidationException so the RAG fail-open policy
+    // never falls back on them.
+
     [Fact]
-    public async Task Missing_relevance_score_is_rejected()
+    public async Task Missing_relevance_score_is_rejected_as_validation()
     {
         var handler = new FakeBedrockRerankHandler(_ =>
-            new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(
-                    "{\"results\":[{\"index\":0}]}",
-                    System.Text.Encoding.UTF8, "application/json"),
-            });
+            OkJson("{\"results\":[{\"index\":0}]}"));
         using var sut = FakeBedrock.Sut(handler);
 
-        await Assert.ThrowsAsync<ChunkRerankingException>(() =>
+        await Assert.ThrowsAsync<ChunkRerankingValidationException>(() =>
             sut.Invoker.RerankAsync("q", ["a"], CancellationToken.None));
     }
+
+    [Fact]
+    public async Task Missing_index_is_rejected_as_validation()
+    {
+        var handler = new FakeBedrockRerankHandler(_ =>
+            OkJson("{\"results\":[{\"relevanceScore\":0.5}]}"));
+        using var sut = FakeBedrock.Sut(handler);
+
+        await Assert.ThrowsAsync<ChunkRerankingValidationException>(() =>
+            sut.Invoker.RerankAsync("q", ["a"], CancellationToken.None));
+    }
+
+    private static HttpResponseMessage OkJson(string body) =>
+        new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json"),
+        };
 
     [Theory]
     [InlineData(HttpStatusCode.Forbidden, "AccessDeniedException")]
