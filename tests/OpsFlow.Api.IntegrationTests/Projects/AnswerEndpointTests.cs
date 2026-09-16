@@ -850,6 +850,70 @@ public sealed class AnswerEndpointTests : IDisposable
         Assert.Same(reranker, scope.ServiceProvider.GetService<IChunkReranker>());
     }
 
+    [Fact]
+    public async Task Answer_default_off_does_not_construct_or_invoke_reranker_provider()
+    {
+        // Default OFF: the reranking flag is intentionally NOT set. The IChunkReranker
+        // is registered through a DI factory that records construction, so we can
+        // prove the reranker/provider graph (Bedrock adapter + AWS client) is never
+        // resolved on the default hybrid answer path — independently of whether AWS
+        // is reachable. Under the default policy the reranked service is supplied to
+        // the answer service as an uninvoked factory, so nothing downstream is built.
+        var reranker = new TestChunkReranker();
+        var providerConstructionCount = 0;
+        using var factory = _baseFactory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IEmbeddingGenerator>();
+                services.AddSingleton<IEmbeddingGenerator>(_fakeEmbedding);
+                services.RemoveAll<IGroundedAnswerGenerator>();
+                services.AddSingleton<IGroundedAnswerGenerator>(_fakeAnswer);
+                services.RemoveAll<IChunkReranker>();
+                services.AddSingleton<IChunkReranker>(_ =>
+                {
+                    providerConstructionCount++;
+                    return reranker;
+                });
+            });
+        });
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost"),
+            HandleCookies = false,
+            AllowAutoRedirect = false,
+        });
+
+        using var scope = factory.Services.CreateScope();
+        var org = await AuthenticationTestHost.SeedOrganizationAsync(scope.ServiceProvider);
+        var user = await AuthenticationTestHost.SeedUserAsync(
+            scope.ServiceProvider, org.Id, DefaultPassword, role: "Coordinator");
+        var token = await LoginClientAsync(client, user.Email!);
+        var projectId = await SeedProjectAsync(scope.ServiceProvider, org.Id);
+
+        var chunkIds = await SeedDocumentWithChunksAsync(
+            scope.ServiceProvider, org.Id, projectId,
+            ["machine learning algorithms optimize training"]);
+        await WaitForFullTextPopulationAsync();
+
+        _fakeAnswer.Output = new GroundedAnswerGenerationOutput(
+            GeneratedAnswerStatus.Answered, "Answer.", [1]);
+
+        using var response = await client.SendAsync(
+            BuildAnswerRequest(token, projectId, new { question = "machine learning algorithms" }));
+
+        // The default hybrid path answers successfully...
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = await response.Content.ReadFromJsonAsync<AnswerProjectQuestionResponse>();
+        Assert.NotNull(result);
+        Assert.Equal("answered", result.Status);
+        Assert.Equal(chunkIds[0], Assert.Single(result.Citations).DocumentChunkId);
+
+        // ...without ever resolving/constructing or invoking the reranker provider.
+        Assert.Equal(0, providerConstructionCount);
+        Assert.Equal(0, reranker.CallCount);
+    }
+
     // ================================================================
     // Test fakes
     // ================================================================

@@ -70,9 +70,12 @@ builder.Services.AddScoped(serviceProvider =>
             ? AnswerRetrievalPolicy.RerankWithHybridFallback
             : AnswerRetrievalPolicy.HybridOnly;
 
+    // The reranked search is passed as a factory, not resolved here, so the
+    // reranked/provider (Bedrock reranker + AWS client) graph is constructed only
+    // when the reranking path runs. Under HybridOnly it is never resolved.
     return new AnswerProjectQuestionService(
         serviceProvider.GetRequiredService<SearchDocumentChunksHybridService>(),
-        serviceProvider.GetRequiredService<SearchDocumentChunksRerankedService>(),
+        () => serviceProvider.GetRequiredService<SearchDocumentChunksRerankedService>(),
         serviceProvider.GetRequiredService<IGroundedAnswerGenerator>(),
         answerRetrievalPolicy);
 });

@@ -51,23 +51,28 @@ public sealed partial class AnswerProjectQuestionService
         "- Never output database ids, chunk ids, character offsets, or ranking metadata; only the temporary integer evidence ids exist for you.";
 
     private readonly SearchDocumentChunksHybridService _hybridSearch;
-    private readonly SearchDocumentChunksRerankedService _rerankedSearch;
+    private readonly Func<SearchDocumentChunksRerankedService> _rerankedSearchFactory;
     private readonly IGroundedAnswerGenerator _answerGenerator;
     private readonly AnswerRetrievalPolicy _retrievalPolicy;
 
-    /// <summary>Creates the service with its dependencies and evidence-retrieval policy.</summary>
+    /// <summary>
+    /// Creates the service with its dependencies and evidence-retrieval policy.
+    /// The reranked search is supplied as a factory so it is resolved only when the
+    /// policy actually reranks; under <see cref="AnswerRetrievalPolicy.HybridOnly"/>
+    /// the reranked dependency graph is never resolved or constructed.
+    /// </summary>
     public AnswerProjectQuestionService(
         SearchDocumentChunksHybridService hybridSearch,
-        SearchDocumentChunksRerankedService rerankedSearch,
+        Func<SearchDocumentChunksRerankedService> rerankedSearchFactory,
         IGroundedAnswerGenerator answerGenerator,
         AnswerRetrievalPolicy retrievalPolicy)
     {
         ArgumentNullException.ThrowIfNull(hybridSearch);
-        ArgumentNullException.ThrowIfNull(rerankedSearch);
+        ArgumentNullException.ThrowIfNull(rerankedSearchFactory);
         ArgumentNullException.ThrowIfNull(answerGenerator);
 
         _hybridSearch = hybridSearch;
-        _rerankedSearch = rerankedSearch;
+        _rerankedSearchFactory = rerankedSearchFactory;
         _answerGenerator = answerGenerator;
         _retrievalPolicy = retrievalPolicy;
     }
@@ -138,10 +143,15 @@ public sealed partial class AnswerProjectQuestionService
             return ToRetrieval(hybridOnly, AnswerRetrievalMode.Hybrid);
         }
 
+        // Resolve the reranked search only here — on the reranking path — so the
+        // reranked and provider (reranker/AWS) graph is never resolved or
+        // constructed under HybridOnly.
+        var rerankedSearch = _rerankedSearchFactory();
+
         SearchDocumentChunksRerankedResult reranked;
         try
         {
-            reranked = await _rerankedSearch.SearchAsync(
+            reranked = await rerankedSearch.SearchAsync(
                 new SearchDocumentChunksRerankedQuery(
                     query.OrganizationId,
                     query.ProjectId,

@@ -27,7 +27,7 @@ public sealed class AnswerProjectQuestionServiceTests
         var reranked = new SearchDocumentChunksRerankedService(hybrid, new FakeChunkReranker());
         var answerGen = new FakeGroundedAnswerGenerator();
         var service = new AnswerProjectQuestionService(
-            hybrid, reranked, answerGen, AnswerRetrievalPolicy.HybridOnly);
+            hybrid, () => reranked, answerGen, AnswerRetrievalPolicy.HybridOnly);
         return (service, projects, embedding, semantic, lexical, answerGen);
     }
 
@@ -50,7 +50,7 @@ public sealed class AnswerProjectQuestionServiceTests
         var reranker = new FakeChunkReranker();
         var reranked = new SearchDocumentChunksRerankedService(hybrid, reranker);
         var answerGen = new FakeGroundedAnswerGenerator();
-        var service = new AnswerProjectQuestionService(hybrid, reranked, answerGen, policy);
+        var service = new AnswerProjectQuestionService(hybrid, () => reranked, answerGen, policy);
         return (service, projects, semantic, lexical, answerGen, reranker);
     }
 
@@ -94,15 +94,18 @@ public sealed class AnswerProjectQuestionServiceTests
         var reranked = new SearchDocumentChunksRerankedService(NewHybrid(), new FakeChunkReranker());
         Assert.Throws<ArgumentNullException>(() =>
             new AnswerProjectQuestionService(
-                null!, reranked, new FakeGroundedAnswerGenerator(), AnswerRetrievalPolicy.HybridOnly));
+                null!, () => reranked, new FakeGroundedAnswerGenerator(), AnswerRetrievalPolicy.HybridOnly));
     }
 
     [Fact]
-    public void Constructor_rejects_null_reranked_service()
+    public void Constructor_rejects_null_reranked_service_factory()
     {
         Assert.Throws<ArgumentNullException>(() =>
             new AnswerProjectQuestionService(
-                NewHybrid(), null!, new FakeGroundedAnswerGenerator(), AnswerRetrievalPolicy.HybridOnly));
+                NewHybrid(),
+                null!,
+                new FakeGroundedAnswerGenerator(),
+                AnswerRetrievalPolicy.HybridOnly));
     }
 
     [Fact]
@@ -112,7 +115,7 @@ public sealed class AnswerProjectQuestionServiceTests
         var reranked = new SearchDocumentChunksRerankedService(hybrid, new FakeChunkReranker());
 
         Assert.Throws<ArgumentNullException>(() =>
-            new AnswerProjectQuestionService(hybrid, reranked, null!, AnswerRetrievalPolicy.HybridOnly));
+            new AnswerProjectQuestionService(hybrid, () => reranked, null!, AnswerRetrievalPolicy.HybridOnly));
     }
 
     // ================================================================
