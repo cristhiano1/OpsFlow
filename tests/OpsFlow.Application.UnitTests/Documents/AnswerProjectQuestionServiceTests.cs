@@ -15,7 +15,7 @@ public sealed class AnswerProjectQuestionServiceTests
         FakeSemanticChunkRetriever Semantic,
         FakeLexicalChunkRetriever Lexical,
         FakeGroundedAnswerGenerator AnswerGen)
-        CreateService()
+        CreateService(IGroundedAnswerTelemetry? telemetry = null)
     {
         var projects = new FakeProjectRepository();
         var embedding = new FakeEmbeddingGenerator();
@@ -27,7 +27,8 @@ public sealed class AnswerProjectQuestionServiceTests
         var reranked = new SearchDocumentChunksRerankedService(hybrid, new FakeChunkReranker());
         var answerGen = new FakeGroundedAnswerGenerator();
         var service = new AnswerProjectQuestionService(
-            hybrid, () => reranked, answerGen, AnswerRetrievalPolicy.HybridOnly);
+            hybrid, () => reranked, answerGen, AnswerRetrievalPolicy.HybridOnly,
+            telemetry ?? NullGroundedAnswerTelemetry.Instance);
         return (service, projects, embedding, semantic, lexical, answerGen);
     }
 
@@ -40,7 +41,9 @@ public sealed class AnswerProjectQuestionServiceTests
         FakeLexicalChunkRetriever Lexical,
         FakeGroundedAnswerGenerator AnswerGen,
         FakeChunkReranker Reranker)
-        CreateRerankingService(AnswerRetrievalPolicy policy = AnswerRetrievalPolicy.RerankWithHybridFallback)
+        CreateRerankingService(
+            AnswerRetrievalPolicy policy = AnswerRetrievalPolicy.RerankWithHybridFallback,
+            IGroundedAnswerTelemetry? telemetry = null)
     {
         var projects = new FakeProjectRepository();
         var embedding = new FakeEmbeddingGenerator();
@@ -50,7 +53,9 @@ public sealed class AnswerProjectQuestionServiceTests
         var reranker = new FakeChunkReranker();
         var reranked = new SearchDocumentChunksRerankedService(hybrid, reranker);
         var answerGen = new FakeGroundedAnswerGenerator();
-        var service = new AnswerProjectQuestionService(hybrid, () => reranked, answerGen, policy);
+        var service = new AnswerProjectQuestionService(
+            hybrid, () => reranked, answerGen, policy,
+            telemetry ?? NullGroundedAnswerTelemetry.Instance);
         return (service, projects, semantic, lexical, answerGen, reranker);
     }
 
@@ -94,7 +99,8 @@ public sealed class AnswerProjectQuestionServiceTests
         var reranked = new SearchDocumentChunksRerankedService(NewHybrid(), new FakeChunkReranker());
         Assert.Throws<ArgumentNullException>(() =>
             new AnswerProjectQuestionService(
-                null!, () => reranked, new FakeGroundedAnswerGenerator(), AnswerRetrievalPolicy.HybridOnly));
+                null!, () => reranked, new FakeGroundedAnswerGenerator(), AnswerRetrievalPolicy.HybridOnly,
+                NullGroundedAnswerTelemetry.Instance));
     }
 
     [Fact]
@@ -105,7 +111,8 @@ public sealed class AnswerProjectQuestionServiceTests
                 NewHybrid(),
                 null!,
                 new FakeGroundedAnswerGenerator(),
-                AnswerRetrievalPolicy.HybridOnly));
+                AnswerRetrievalPolicy.HybridOnly,
+                NullGroundedAnswerTelemetry.Instance));
     }
 
     [Fact]
@@ -115,7 +122,21 @@ public sealed class AnswerProjectQuestionServiceTests
         var reranked = new SearchDocumentChunksRerankedService(hybrid, new FakeChunkReranker());
 
         Assert.Throws<ArgumentNullException>(() =>
-            new AnswerProjectQuestionService(hybrid, () => reranked, null!, AnswerRetrievalPolicy.HybridOnly));
+            new AnswerProjectQuestionService(
+                hybrid, () => reranked, null!, AnswerRetrievalPolicy.HybridOnly,
+                NullGroundedAnswerTelemetry.Instance));
+    }
+
+    [Fact]
+    public void Constructor_rejects_null_telemetry()
+    {
+        var hybrid = NewHybrid();
+        var reranked = new SearchDocumentChunksRerankedService(hybrid, new FakeChunkReranker());
+
+        Assert.Throws<ArgumentNullException>(() =>
+            new AnswerProjectQuestionService(
+                hybrid, () => reranked, new FakeGroundedAnswerGenerator(), AnswerRetrievalPolicy.HybridOnly,
+                null!));
     }
 
     // ================================================================
@@ -1297,6 +1318,238 @@ public sealed class AnswerProjectQuestionServiceTests
         Assert.Equal(70, citation.StartOffset);
         Assert.Equal(75, citation.EndOffset);
         Assert.Equal("hello", citation.Text);
+    }
+
+    // ================================================================
+    // Observability telemetry (bounded, provider-neutral, privacy-safe)
+    // ================================================================
+
+    [Fact]
+    public async Task Answer_hybrid_success_records_answered_outcome_and_hybrid_mode()
+    {
+        var telemetry = new RecordingGroundedAnswerTelemetry();
+        var (service, projects, _, semantic, _, answerGen) = CreateService(telemetry);
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit(text: "one"), MakeHit(text: "two")];
+        answerGen.Output = Answered("Grounded.", 1, 2);
+
+        await service.AnswerAsync(MakeQuery(), CancellationToken.None);
+
+        var m = telemetry.Single;
+        Assert.Equal(AnswerPipelineOutcome.Answered, m.Outcome);
+        Assert.Equal(AnswerRetrievalMode.Hybrid, m.RetrievalMode);
+        Assert.Equal(AnswerFailureCategory.None, m.FailureCategory);
+        Assert.Equal(2, m.SelectedEvidenceCount);
+        Assert.NotNull(m.GenerationDuration);
+        Assert.True(m.TotalDuration >= TimeSpan.Zero);
+        Assert.True(m.RetrievalDuration >= TimeSpan.Zero);
+    }
+
+    [Fact]
+    public async Task Answer_reranked_success_records_reranked_mode()
+    {
+        var telemetry = new RecordingGroundedAnswerTelemetry();
+        var (service, projects, semantic, _, answerGen, _) = CreateRerankingService(telemetry: telemetry);
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit(text: "alpha")];
+        answerGen.Output = Answered("Grounded.", 1);
+
+        await service.AnswerAsync(MakeQuery(), CancellationToken.None);
+
+        Assert.Equal(AnswerRetrievalMode.Reranked, telemetry.Single.RetrievalMode);
+        Assert.Equal(AnswerPipelineOutcome.Answered, telemetry.Single.Outcome);
+    }
+
+    [Fact]
+    public async Task Answer_operational_reranker_failure_records_hybrid_fallback_mode()
+    {
+        var telemetry = new RecordingGroundedAnswerTelemetry();
+        var (service, projects, semantic, _, answerGen, reranker) = CreateRerankingService(telemetry: telemetry);
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit(text: "alpha")];
+        reranker.ExceptionToThrow = new ChunkRerankingException("provider unavailable");
+        answerGen.Output = Answered("Grounded.", 1);
+
+        await service.AnswerAsync(MakeQuery(), CancellationToken.None);
+
+        var m = telemetry.Single;
+        // Operational fallback is a successful answer via hybrid, not a failure.
+        Assert.Equal(AnswerPipelineOutcome.Answered, m.Outcome);
+        Assert.Equal(AnswerRetrievalMode.HybridFallback, m.RetrievalMode);
+        Assert.Equal(AnswerFailureCategory.None, m.FailureCategory);
+    }
+
+    [Fact]
+    public async Task Answer_zero_evidence_records_insufficient_not_applicable_without_generation()
+    {
+        var telemetry = new RecordingGroundedAnswerTelemetry();
+        var (service, projects, _, _, _, _) = CreateService(telemetry);
+        projects.ExistsResult = true; // both retrievers empty
+
+        await service.AnswerAsync(MakeQuery(), CancellationToken.None);
+
+        var m = telemetry.Single;
+        Assert.Equal(AnswerPipelineOutcome.InsufficientEvidence, m.Outcome);
+        Assert.Equal(AnswerRetrievalMode.NotApplicable, m.RetrievalMode);
+        Assert.Null(m.SelectedEvidenceCount);
+        Assert.Null(m.GenerationDuration);
+    }
+
+    [Fact]
+    public async Task Answer_project_not_found_records_project_not_found_without_generation()
+    {
+        var telemetry = new RecordingGroundedAnswerTelemetry();
+        var (service, projects, _, _, _, _) = CreateService(telemetry);
+        projects.ExistsResult = false;
+
+        await service.AnswerAsync(MakeQuery(), CancellationToken.None);
+
+        var m = telemetry.Single;
+        Assert.Equal(AnswerPipelineOutcome.ProjectNotFound, m.Outcome);
+        Assert.Equal(AnswerRetrievalMode.NotApplicable, m.RetrievalMode);
+        Assert.Null(m.SelectedEvidenceCount);
+        Assert.Null(m.GenerationDuration);
+    }
+
+    [Fact]
+    public async Task Answer_generator_declared_insufficient_records_insufficient_with_generation()
+    {
+        var telemetry = new RecordingGroundedAnswerTelemetry();
+        var (service, projects, _, semantic, _, answerGen) = CreateService(telemetry);
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit()];
+        answerGen.Output = Insufficient();
+
+        await service.AnswerAsync(MakeQuery(), CancellationToken.None);
+
+        var m = telemetry.Single;
+        Assert.Equal(AnswerPipelineOutcome.InsufficientEvidence, m.Outcome);
+        Assert.Equal(AnswerRetrievalMode.Hybrid, m.RetrievalMode);
+        // Evidence was selected and the generator ran, then declared insufficient.
+        Assert.Equal(1, m.SelectedEvidenceCount);
+        Assert.NotNull(m.GenerationDuration);
+    }
+
+    [Fact]
+    public async Task Answer_answer_provider_failure_records_failed_answer_provider_category()
+    {
+        var telemetry = new RecordingGroundedAnswerTelemetry();
+        var (service, projects, _, semantic, _, answerGen) = CreateService(telemetry);
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit()];
+        answerGen.ExceptionToThrow = new AnswerGenerationException("provider is down");
+
+        await Assert.ThrowsAsync<AnswerGenerationException>(() =>
+            service.AnswerAsync(MakeQuery(), CancellationToken.None));
+
+        var m = telemetry.Single;
+        Assert.Equal(AnswerPipelineOutcome.Failed, m.Outcome);
+        Assert.Equal(AnswerFailureCategory.AnswerProviderFailure, m.FailureCategory);
+    }
+
+    [Fact]
+    public async Task Answer_validation_failure_is_distinct_from_operational_failure()
+    {
+        var telemetry = new RecordingGroundedAnswerTelemetry();
+        var (service, projects, _, semantic, _, answerGen) = CreateService(telemetry);
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit()];
+        // One evidence item selected, so citation 999 is out of range -> validation.
+        answerGen.Output = Answered("Answer.", 999);
+
+        await Assert.ThrowsAsync<GroundedAnswerValidationException>(() =>
+            service.AnswerAsync(MakeQuery(), CancellationToken.None));
+
+        var m = telemetry.Single;
+        Assert.Equal(AnswerPipelineOutcome.Failed, m.Outcome);
+        Assert.Equal(AnswerFailureCategory.AnswerValidation, m.FailureCategory);
+        Assert.NotEqual(AnswerFailureCategory.AnswerProviderFailure, m.FailureCategory);
+    }
+
+    [Fact]
+    public async Task Answer_reranker_validation_failure_records_failed_reranker_validation()
+    {
+        var telemetry = new RecordingGroundedAnswerTelemetry();
+        var (service, projects, semantic, _, _, reranker) = CreateRerankingService(telemetry: telemetry);
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit()];
+        reranker.ExceptionToThrow = new ChunkRerankingValidationException("malformed provider output");
+
+        await Assert.ThrowsAsync<ChunkRerankingValidationException>(() =>
+            service.AnswerAsync(MakeQuery(), CancellationToken.None));
+
+        var m = telemetry.Single;
+        Assert.Equal(AnswerPipelineOutcome.Failed, m.Outcome);
+        Assert.Equal(AnswerFailureCategory.RerankerValidation, m.FailureCategory);
+    }
+
+    [Fact]
+    public async Task Answer_caller_cancellation_records_canceled_not_internal_failure()
+    {
+        var telemetry = new RecordingGroundedAnswerTelemetry();
+        var (service, projects, _, semantic, _, _) = CreateService(telemetry);
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit()];
+
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            service.AnswerAsync(MakeQuery(), cts.Token));
+
+        var m = telemetry.Single;
+        Assert.Equal(AnswerPipelineOutcome.Canceled, m.Outcome);
+        Assert.Equal(AnswerFailureCategory.None, m.FailureCategory);
+        Assert.NotEqual(AnswerPipelineOutcome.Failed, m.Outcome);
+    }
+
+    [Fact]
+    public async Task Answer_records_telemetry_once_and_invokes_generator_once()
+    {
+        var telemetry = new RecordingGroundedAnswerTelemetry();
+        var (service, projects, _, semantic, _, answerGen) = CreateService(telemetry);
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit()];
+        answerGen.Output = Answered("Grounded.", 1);
+
+        await service.AnswerAsync(MakeQuery(), CancellationToken.None);
+
+        Assert.Single(telemetry.Measurements);
+        Assert.Equal(1, answerGen.CallCount);
+    }
+
+    [Fact]
+    public async Task Answer_throwing_telemetry_never_breaks_the_answer_path()
+    {
+        var telemetry = new RecordingGroundedAnswerTelemetry
+        {
+            ExceptionToThrow = new InvalidOperationException("exporter unavailable"),
+        };
+        var (service, projects, _, semantic, _, answerGen) = CreateService(telemetry);
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit()];
+        answerGen.Output = Answered("Grounded.", 1);
+
+        var result = await service.AnswerAsync(MakeQuery(), CancellationToken.None);
+
+        // The answer succeeds even though telemetry threw.
+        Assert.Equal(AnswerProjectQuestionStatus.Success, result.Status);
+        Assert.Equal("Grounded.", result.Answer!.Text);
+        Assert.Equal(1, answerGen.CallCount);
+    }
+
+    [Fact]
+    public void Grounded_answer_measurement_exposes_no_content_or_identifier_fields()
+    {
+        // Structural privacy: the measurement carries no string (content) and no Guid
+        // (identifier) fields, so no question/answer/evidence text and no
+        // org/project/document/chunk id can be emitted through telemetry by design.
+        foreach (var property in typeof(GroundedAnswerMeasurement).GetProperties())
+        {
+            var type = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+            Assert.NotEqual(typeof(string), type);
+            Assert.NotEqual(typeof(Guid), type);
+        }
     }
 
     // ================================================================
