@@ -12,6 +12,7 @@ using OpsFlow.Infrastructure.Persistence;
 using OpsFlow.Infrastructure.Seeding;
 using OpsFlow.Application.Documents;
 using OpsFlow.Infrastructure.Documents;
+using OpsFlow.Infrastructure.Observability;
 using OpsFlow.Infrastructure.Time;
 
 namespace OpsFlow.Infrastructure;
@@ -62,9 +63,19 @@ public static class InfrastructureServiceCollectionExtensions
         AddEmbeddingProvider(services, configuration);
         AddAnswerGenerationProvider(services, configuration);
         AddRerankingProvider(services, configuration);
+        AddGroundedAnswerObservability(services);
         AddAuthenticationFoundation(services, configuration);
 
         return services;
+    }
+
+    // Internal so the infrastructure unit tests can exercise it in isolation.
+    // Registers the BCL-metrics-backed grounded-answer telemetry sink behind the
+    // provider-neutral IGroundedAnswerTelemetry port. It creates instruments only;
+    // no exporter or external collector is required (see ADR-012).
+    internal static void AddGroundedAnswerObservability(IServiceCollection services)
+    {
+        services.AddSingleton<IGroundedAnswerTelemetry, MeterGroundedAnswerTelemetry>();
     }
 
     // Internal so the infrastructure unit tests can exercise it without

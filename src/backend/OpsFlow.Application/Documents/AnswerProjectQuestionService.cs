@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Security;
 using System.Text.RegularExpressions;
@@ -54,27 +55,32 @@ public sealed partial class AnswerProjectQuestionService
     private readonly Func<SearchDocumentChunksRerankedService> _rerankedSearchFactory;
     private readonly IGroundedAnswerGenerator _answerGenerator;
     private readonly AnswerRetrievalPolicy _retrievalPolicy;
+    private readonly IGroundedAnswerTelemetry _telemetry;
 
     /// <summary>
     /// Creates the service with its dependencies and evidence-retrieval policy.
     /// The reranked search is supplied as a factory so it is resolved only when the
     /// policy actually reranks; under <see cref="AnswerRetrievalPolicy.HybridOnly"/>
-    /// the reranked dependency graph is never resolved or constructed.
+    /// the reranked dependency graph is never resolved or constructed. Telemetry is
+    /// provider-neutral and never affects the answer path.
     /// </summary>
     public AnswerProjectQuestionService(
         SearchDocumentChunksHybridService hybridSearch,
         Func<SearchDocumentChunksRerankedService> rerankedSearchFactory,
         IGroundedAnswerGenerator answerGenerator,
-        AnswerRetrievalPolicy retrievalPolicy)
+        AnswerRetrievalPolicy retrievalPolicy,
+        IGroundedAnswerTelemetry telemetry)
     {
         ArgumentNullException.ThrowIfNull(hybridSearch);
         ArgumentNullException.ThrowIfNull(rerankedSearchFactory);
         ArgumentNullException.ThrowIfNull(answerGenerator);
+        ArgumentNullException.ThrowIfNull(telemetry);
 
         _hybridSearch = hybridSearch;
         _rerankedSearchFactory = rerankedSearchFactory;
         _answerGenerator = answerGenerator;
         _retrievalPolicy = retrievalPolicy;
+        _telemetry = telemetry;
     }
 
     /// <summary>
@@ -88,45 +94,149 @@ public sealed partial class AnswerProjectQuestionService
     {
         ArgumentNullException.ThrowIfNull(query);
 
-        // Retrieve evidence per the configured policy. The underlying hybrid and
-        // reranked services perform all query-text validation
-        // (null/whitespace/length/rune), organization scoping, and project
-        // existence — including the cross-tenant-indistinguishable ProjectNotFound
-        // semantics. The original question is forwarded unchanged.
-        var retrieval = await RetrieveEvidenceAsync(query, cancellationToken);
+        // Observability boundaries. Durations are captured with finally blocks so a
+        // failure mid-phase still reports the time spent, and the retrieval mode is
+        // hoisted so it is known even when a later phase fails. None of this alters
+        // the answer path: exceptions are recorded then rethrown unchanged.
+        var startTimestamp = Stopwatch.GetTimestamp();
+        var retrievalMode = AnswerRetrievalMode.NotApplicable;
+        var retrievalDuration = TimeSpan.Zero;
+        TimeSpan? generationDuration = null;
 
-        if (!retrieval.ProjectFound)
+        try
         {
-            return AnswerProjectQuestionResult.ProjectNotFound();
+            // Retrieve evidence per the configured policy. The underlying hybrid and
+            // reranked services perform all query-text validation
+            // (null/whitespace/length/rune), organization scoping, and project
+            // existence — including the cross-tenant-indistinguishable ProjectNotFound
+            // semantics. The original question is forwarded unchanged.
+            EvidenceRetrieval retrieval;
+            var retrievalStart = Stopwatch.GetTimestamp();
+            try
+            {
+                retrieval = await RetrieveEvidenceAsync(query, cancellationToken);
+            }
+            finally
+            {
+                retrievalDuration = Stopwatch.GetElapsedTime(retrievalStart);
+            }
+
+            retrievalMode = retrieval.Mode;
+
+            if (!retrieval.ProjectFound)
+            {
+                Record(AnswerPipelineOutcome.ProjectNotFound, retrievalMode, AnswerFailureCategory.None,
+                    selectedEvidenceCount: null, startTimestamp, retrievalDuration, generationDuration);
+                return AnswerProjectQuestionResult.ProjectNotFound();
+            }
+
+            if (retrieval.Evidence.Count == 0)
+            {
+                // No evidence: never invoke the generator (cost + no unsupported
+                // hallucination). No reranker scored answerable evidence.
+                Record(AnswerPipelineOutcome.InsufficientEvidence, retrievalMode, AnswerFailureCategory.None,
+                    selectedEvidenceCount: null, startTimestamp, retrievalDuration, generationDuration);
+                return AnswerProjectQuestionResult.InsufficientEvidence(retrieval.Mode);
+            }
+
+            EnsureNoDuplicateChunks(retrieval.Evidence);
+
+            var selectedEvidence = SelectBoundedEvidence(retrieval.Evidence);
+
+            var userPrompt = BuildUserPrompt(query.Question, selectedEvidence);
+
+            // Defensive: the port is non-nullable, but a misbehaving implementation
+            // must not be able to produce a null-dereference or an unverified answer.
+            GroundedAnswerGenerationOutput? output;
+            var generationStart = Stopwatch.GetTimestamp();
+            try
+            {
+                output = await _answerGenerator.GenerateAsync(
+                    new GroundedAnswerGenerationRequest(SystemPrompt, userPrompt),
+                    cancellationToken);
+            }
+            finally
+            {
+                generationDuration = Stopwatch.GetElapsedTime(generationStart);
+            }
+
+            if (output is null)
+            {
+                throw new GroundedAnswerValidationException("Answer generator returned a null output.");
+            }
+
+            var result = output.Status switch
+            {
+                GeneratedAnswerStatus.InsufficientEvidence => MapInsufficient(output, retrieval.Mode),
+                GeneratedAnswerStatus.Answered => MapAnswered(output, selectedEvidence, retrieval.Mode),
+                _ => throw new GroundedAnswerValidationException(
+                    $"Generator returned an unrecognized status '{output.Status}'."),
+            };
+
+            var outcome = result.Status == AnswerProjectQuestionStatus.Success
+                ? AnswerPipelineOutcome.Answered
+                : AnswerPipelineOutcome.InsufficientEvidence;
+            Record(outcome, retrievalMode, AnswerFailureCategory.None,
+                selectedEvidence.Count, startTimestamp, retrievalDuration, generationDuration);
+            return result;
         }
-
-        if (retrieval.Evidence.Count == 0)
+        catch (OperationCanceledException)
         {
-            // No evidence: never invoke the generator (cost + no unsupported
-            // hallucination). No reranker scored answerable evidence.
-            return AnswerProjectQuestionResult.InsufficientEvidence(retrieval.Mode);
+            // Caller cancellation is not a system failure; record it as such and
+            // propagate unchanged.
+            Record(AnswerPipelineOutcome.Canceled, retrievalMode, AnswerFailureCategory.None,
+                selectedEvidenceCount: null, startTimestamp, retrievalDuration, generationDuration);
+            throw;
         }
-
-        EnsureNoDuplicateChunks(retrieval.Evidence);
-
-        var selectedEvidence = SelectBoundedEvidence(retrieval.Evidence);
-
-        var userPrompt = BuildUserPrompt(query.Question, selectedEvidence);
-
-        // Defensive: the port is non-nullable, but a misbehaving implementation
-        // must not be able to produce a null-dereference or an unverified answer.
-        var output = await _answerGenerator.GenerateAsync(
-                new GroundedAnswerGenerationRequest(SystemPrompt, userPrompt),
-                cancellationToken)
-            ?? throw new GroundedAnswerValidationException("Answer generator returned a null output.");
-
-        return output.Status switch
+        catch (Exception ex)
         {
-            GeneratedAnswerStatus.InsufficientEvidence => MapInsufficient(output, retrieval.Mode),
-            GeneratedAnswerStatus.Answered => MapAnswered(output, selectedEvidence, retrieval.Mode),
-            _ => throw new GroundedAnswerValidationException(
-                $"Generator returned an unrecognized status '{output.Status}'."),
-        };
+            Record(AnswerPipelineOutcome.Failed, retrievalMode, CategorizeFailure(ex),
+                selectedEvidenceCount: null, startTimestamp, retrievalDuration, generationDuration);
+            throw;
+        }
+    }
+
+    // Maps the Application exception taxonomy onto a bounded, provider-neutral
+    // failure category. The exception message is never inspected or emitted.
+    private static AnswerFailureCategory CategorizeFailure(Exception exception) => exception switch
+    {
+        EmbeddingGenerationException => AnswerFailureCategory.EmbeddingProviderFailure,
+        AnswerGenerationException => AnswerFailureCategory.AnswerProviderFailure,
+        GroundedAnswerValidationException => AnswerFailureCategory.AnswerValidation,
+        ChunkRerankingValidationException => AnswerFailureCategory.RerankerValidation,
+        ChunkRerankingException => AnswerFailureCategory.RerankerOperational,
+        _ => AnswerFailureCategory.Internal,
+    };
+
+    // Builds the bounded measurement and forwards it to the telemetry sink. Telemetry
+    // must never affect the answer path, so any exception from the sink is swallowed.
+    private void Record(
+        AnswerPipelineOutcome outcome,
+        AnswerRetrievalMode retrievalMode,
+        AnswerFailureCategory failureCategory,
+        int? selectedEvidenceCount,
+        long startTimestamp,
+        TimeSpan retrievalDuration,
+        TimeSpan? generationDuration)
+    {
+        var measurement = new GroundedAnswerMeasurement(
+            outcome,
+            retrievalMode,
+            failureCategory,
+            selectedEvidenceCount,
+            Stopwatch.GetElapsedTime(startTimestamp),
+            retrievalDuration,
+            generationDuration);
+
+        try
+        {
+            _telemetry.Record(measurement);
+        }
+        catch (Exception)
+        {
+            // A misbehaving telemetry sink must never break answering. Swallow
+            // deliberately; there is nothing safe to surface on the request path.
+        }
     }
 
     // Retrieves evidence according to the policy, tracking the mode that actually
