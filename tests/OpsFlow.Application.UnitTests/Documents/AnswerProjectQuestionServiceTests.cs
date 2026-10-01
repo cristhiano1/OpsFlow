@@ -1553,6 +1553,84 @@ public sealed class AnswerProjectQuestionServiceTests
     }
 
     // ================================================================
+    // Review finding 1: evidence count preservation after failures
+    // ================================================================
+
+    [Fact]
+    public async Task Answer_generation_failure_after_evidence_selection_preserves_selected_evidence_count()
+    {
+        var telemetry = new RecordingGroundedAnswerTelemetry();
+        var (service, projects, _, semantic, _, answerGen) = CreateService(telemetry);
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit(text: "one"), MakeHit(text: "two")];
+        answerGen.ExceptionToThrow = new AnswerGenerationException("provider is down");
+
+        await Assert.ThrowsAsync<AnswerGenerationException>(() =>
+            service.AnswerAsync(MakeQuery(), CancellationToken.None));
+
+        var m = telemetry.Single;
+        Assert.Equal(AnswerPipelineOutcome.Failed, m.Outcome);
+        Assert.Equal(2, m.SelectedEvidenceCount);
+    }
+
+    [Fact]
+    public async Task Answer_validation_failure_after_evidence_selection_preserves_selected_evidence_count()
+    {
+        var telemetry = new RecordingGroundedAnswerTelemetry();
+        var (service, projects, _, semantic, _, answerGen) = CreateService(telemetry);
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit()];
+        answerGen.ReturnNull = true;
+
+        await Assert.ThrowsAsync<GroundedAnswerValidationException>(() =>
+            service.AnswerAsync(MakeQuery(), CancellationToken.None));
+
+        var m = telemetry.Single;
+        Assert.Equal(AnswerPipelineOutcome.Failed, m.Outcome);
+        Assert.Equal(AnswerFailureCategory.AnswerValidation, m.FailureCategory);
+        Assert.Equal(1, m.SelectedEvidenceCount);
+    }
+
+    [Fact]
+    public async Task Answer_failure_before_evidence_selection_leaves_selected_evidence_count_absent()
+    {
+        var telemetry = new RecordingGroundedAnswerTelemetry();
+        var (service, projects, _, semantic, _, _) = CreateService(telemetry);
+        projects.ExistsResult = true;
+        var duplicateId = Guid.NewGuid();
+        semantic.RetrieveResult = [MakeHit(chunkId: duplicateId), MakeHit(chunkId: duplicateId)];
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.AnswerAsync(MakeQuery(), CancellationToken.None));
+
+        var m = telemetry.Single;
+        Assert.Equal(AnswerPipelineOutcome.Failed, m.Outcome);
+        Assert.Null(m.SelectedEvidenceCount);
+    }
+
+    // ================================================================
+    // Review finding 2: filtered cancellation catch
+    // ================================================================
+
+    [Fact]
+    public async Task Answer_dependency_oce_without_caller_cancellation_records_failed_not_canceled()
+    {
+        var telemetry = new RecordingGroundedAnswerTelemetry();
+        var (service, projects, _, semantic, _, answerGen) = CreateService(telemetry);
+        projects.ExistsResult = true;
+        semantic.RetrieveResult = [MakeHit()];
+        answerGen.ExceptionToThrow = new OperationCanceledException("provider timeout");
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            service.AnswerAsync(MakeQuery(), CancellationToken.None));
+
+        var m = telemetry.Single;
+        Assert.Equal(AnswerPipelineOutcome.Failed, m.Outcome);
+        Assert.Equal(AnswerFailureCategory.Internal, m.FailureCategory);
+        Assert.NotEqual(AnswerPipelineOutcome.Canceled, m.Outcome);
+    }
+
+    // ================================================================
     // Helpers
     // ================================================================
 

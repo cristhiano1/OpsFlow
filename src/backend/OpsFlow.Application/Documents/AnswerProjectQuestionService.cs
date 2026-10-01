@@ -102,6 +102,7 @@ public sealed partial class AnswerProjectQuestionService
         var retrievalMode = AnswerRetrievalMode.NotApplicable;
         var retrievalDuration = TimeSpan.Zero;
         TimeSpan? generationDuration = null;
+        int? selectedEvidenceCount = null;
 
         try
         {
@@ -142,6 +143,7 @@ public sealed partial class AnswerProjectQuestionService
             EnsureNoDuplicateChunks(retrieval.Evidence);
 
             var selectedEvidence = SelectBoundedEvidence(retrieval.Evidence);
+            selectedEvidenceCount = selectedEvidence.Count;
 
             var userPrompt = BuildUserPrompt(query.Question, selectedEvidence);
 
@@ -180,18 +182,19 @@ public sealed partial class AnswerProjectQuestionService
                 selectedEvidence.Count, startTimestamp, retrievalDuration, generationDuration);
             return result;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // Caller cancellation is not a system failure; record it as such and
-            // propagate unchanged.
+            // propagate unchanged. Provider-internal OCE (e.g. a timeout) with an
+            // uncanceled caller token falls through to the general catch below.
             Record(AnswerPipelineOutcome.Canceled, retrievalMode, AnswerFailureCategory.None,
-                selectedEvidenceCount: null, startTimestamp, retrievalDuration, generationDuration);
+                selectedEvidenceCount, startTimestamp, retrievalDuration, generationDuration);
             throw;
         }
         catch (Exception ex)
         {
             Record(AnswerPipelineOutcome.Failed, retrievalMode, CategorizeFailure(ex),
-                selectedEvidenceCount: null, startTimestamp, retrievalDuration, generationDuration);
+                selectedEvidenceCount, startTimestamp, retrievalDuration, generationDuration);
             throw;
         }
     }
