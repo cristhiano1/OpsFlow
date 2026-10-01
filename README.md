@@ -19,7 +19,9 @@ upload workflows.
 
 - Multi-tenant authentication with JWT access tokens and refresh-token rotation
 - Organization-scoped project and document management
-- Document upload, text extraction (plain text and DOCX), deterministic chunking
+- Document upload, with separate API endpoints for text extraction, chunking,
+  and embedding generation (each step is invoked individually; there is no
+  automatic ingestion pipeline that chains them on upload)
 - Embedding generation (OpenAI text-embedding-3-small)
 - Hybrid retrieval: semantic vector search + SQL Server Full-Text lexical search,
   fused via Reciprocal Rank Fusion
@@ -33,6 +35,10 @@ upload workflows.
 
 **Major pieces not yet implemented:**
 
+- Automated document ingestion (upload does not auto-trigger extraction,
+  chunking, or embedding — each step is a separate API call)
+- Endpoint-level role enforcement (roles are modeled/seeded/in JWTs but
+  not checked at the endpoint level)
 - RAG question-answering UI (backend API exists; no frontend page yet)
 - Application Dockerfiles and container orchestration
 - Health check endpoints
@@ -76,8 +82,10 @@ for authentication concurrency control.
 
 - **Multi-tenancy** — every user belongs to an organization; all queries are
   scoped to the user's organization
-- **Role-based authorization** — four roles: OrganizationAdministrator,
-  Coordinator, Technician, Viewer
+- **Role modeling** — four roles are defined and seeded (OrganizationAdministrator,
+  Coordinator, Technician, Viewer) and included in JWT claims, but endpoint-level
+  role enforcement is not yet implemented; all protected endpoints currently use
+  bare `[Authorize]` (authentication required, no role check)
 
 ### Authentication
 
@@ -89,12 +97,19 @@ for authentication concurrency control.
 
 ### Documents
 
-- Upload with content-type validation (26 MiB limit)
-- Text extraction: plain text and DOCX (via OpenXml)
-- Deterministic overlapping chunking with configurable parameters
+- Upload with content-type validation (25 MiB file size limit)
+- Text extraction: plain text and DOCX (via OpenXml) — triggered via a
+  dedicated API endpoint, not automatically on upload
+- Deterministic overlapping chunking with configurable parameters — triggered
+  via `EnsureDocumentChunksService`, not automatically on upload
 - Embedding generation: OpenAI `text-embedding-3-small` (1536 dimensions,
-  batch size 60)
+  batch size 60) — triggered via `EnsureDocumentEmbeddingsService`, not
+  automatically on upload
 - Local file system storage with organization/project-scoped paths
+
+Documents must be individually indexed (extracted → chunked → embedded) before
+they appear in `/search` or `/answer` results. There is no automated ingestion
+pipeline that chains these steps on upload.
 
 ### AI / RAG pipeline
 
@@ -369,6 +384,12 @@ The following are known gaps, documented here for transparency:
 - **No CORS configuration** — frontend-backend integration currently works
   through the Vite development proxy
 - **No rate limiting**
+- **No automated document ingestion** — uploading a document does not
+  automatically trigger extraction, chunking, or embedding; each step must be
+  invoked individually via its API endpoint before the document is searchable
+- **No endpoint-level role enforcement** — roles are defined, seeded, and
+  carried in JWTs, but all protected endpoints use bare `[Authorize]` with no
+  role or policy checks
 - **No background document processing** — text extraction, chunking, and
   embedding generation are synchronous per-request operations
 - **No pagination** on list endpoints
@@ -378,7 +399,8 @@ The following are known gaps, documented here for transparency:
 - **Backend architecture** — Clean Architecture with strict layer separation,
   dependency inversion via port interfaces, and centralized package management
 - **Security** — JWT authentication with refresh-token rotation, family-based
-  revocation, reuse detection, and timing-attack mitigation
+  revocation, reuse detection, and timing-attack mitigation; roles are modeled
+  and seeded (endpoint-level role enforcement is planned)
 - **Multi-tenancy** — organization-scoped data isolation enforced at the
   query level
 - **RAG pipeline engineering** — hybrid retrieval (vector + lexical + RRF),
