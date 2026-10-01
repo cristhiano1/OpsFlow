@@ -56,7 +56,8 @@ public sealed class DocumentsController : ControllerBase
     public async Task<IActionResult> UploadAsync(
         Guid projectId,
         [FromForm] IFormFile? file,
-        [FromServices] UploadDocumentService uploadDocumentService,
+        [FromServices] IngestDocumentService ingestDocumentService,
+        [FromServices] ILogger<DocumentsController> logger,
         CancellationToken cancellationToken)
     {
         if (!TryGetOrganizationId(out var organizationId))
@@ -71,8 +72,6 @@ public sealed class DocumentsController : ControllerBase
 
         using var stream = file.OpenReadStream();
 
-        // Pass the raw filename from the multipart field; Application layer is the
-        // single authority for sanitization (backslash normalization, length check).
         var command = new UploadDocumentCommand(
             organizationId,
             projectId,
@@ -81,7 +80,25 @@ public sealed class DocumentsController : ControllerBase
             file.Length,
             stream);
 
-        var result = await uploadDocumentService.UploadAsync(command, cancellationToken);
+        IngestDocumentResult result;
+        try
+        {
+            result = await ingestDocumentService.IngestAsync(command, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "Document ingestion failed for Project {ProjectId}, Organization {OrganizationId}",
+                projectId,
+                organizationId);
+            Response.StatusCode = StatusCodes.Status500InternalServerError;
+            return new EmptyResult();
+        }
 
         if (!result.ProjectFound)
         {
@@ -90,6 +107,23 @@ public sealed class DocumentsController : ControllerBase
 
         if (!result.Succeeded)
         {
+            if (result.IngestionFailure != DocumentIngestionFailure.None)
+            {
+                return result.IngestionFailure switch
+                {
+                    DocumentIngestionFailure.ExtractionUnsupportedFormat =>
+                        StatusCode(StatusCodes.Status415UnsupportedMediaType),
+                    DocumentIngestionFailure.ExtractionMalformedDocument =>
+                        UnprocessableEntity(),
+                    DocumentIngestionFailure.ExtractionLimitExceeded =>
+                        UnprocessableEntity(),
+                    DocumentIngestionFailure.ExtractionStorageMissing =>
+                        StatusCode(StatusCodes.Status500InternalServerError),
+                    DocumentIngestionFailure.None or _ =>
+                        StatusCode(StatusCodes.Status500InternalServerError),
+                };
+            }
+
             if (result.Error is not null && result.Error.Contains("MiB", StringComparison.OrdinalIgnoreCase))
             {
                 return StatusCode(StatusCodes.Status413PayloadTooLarge);

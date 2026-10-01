@@ -19,9 +19,9 @@ upload workflows.
 
 - Multi-tenant authentication with JWT access tokens and refresh-token rotation
 - Organization-scoped project and document management
-- Document upload, with separate API endpoints for text extraction, chunking,
-  and embedding generation (each step is invoked individually; there is no
-  automatic ingestion pipeline that chains them on upload)
+- Document upload with automatic ingestion: uploading a document triggers text
+  extraction, chunking, and embedding generation synchronously, so the document
+  is indexed and searchable as soon as the upload response returns
 - Embedding generation (OpenAI text-embedding-3-small)
 - Hybrid retrieval: semantic vector search + SQL Server Full-Text lexical search,
   fused via Reciprocal Rank Fusion
@@ -35,8 +35,6 @@ upload workflows.
 
 **Major pieces not yet implemented:**
 
-- Automated document ingestion (upload does not auto-trigger extraction,
-  chunking, or embedding — each step is a separate API call)
 - Endpoint-level role enforcement (roles are modeled/seeded/in JWTs but
   not checked at the endpoint level)
 - RAG question-answering UI (backend API exists; no frontend page yet)
@@ -98,18 +96,19 @@ for authentication concurrency control.
 ### Documents
 
 - Upload with content-type validation (25 MiB file size limit)
-- Text extraction: plain text and DOCX (via OpenXml) — triggered via a
-  dedicated API endpoint, not automatically on upload
-- Deterministic overlapping chunking with configurable parameters — triggered
-  via `EnsureDocumentChunksService`, not automatically on upload
+- Automatic ingestion on upload: `IngestDocumentService` orchestrates text
+  extraction, chunking, and embedding generation synchronously after the file
+  is stored, so documents are indexed and searchable immediately
+- Text extraction: plain text and DOCX (via OpenXml)
+- Deterministic overlapping chunking with configurable parameters
 - Embedding generation: OpenAI `text-embedding-3-small` (1536 dimensions,
-  batch size 60) — triggered via `EnsureDocumentEmbeddingsService`, not
-  automatically on upload
+  batch size 60)
+- All indexing steps are idempotent via `AddIfAbsentAsync`
 - Local file system storage with organization/project-scoped paths
 
-Documents must be individually indexed (extracted → chunked → embedded) before
-they appear in `/search` or `/answer` results. There is no automated ingestion
-pipeline that chains these steps on upload.
+Uploaded documents are automatically indexed (extracted, chunked, embedded)
+before the upload response returns. The individual extraction, chunking, and
+embedding endpoints remain available for manual re-indexing or retry.
 
 ### AI / RAG pipeline
 
@@ -315,17 +314,17 @@ secrets or environment variables — never committed):
 
 ## Testing
 
-**1,251 tests** across six projects:
+**1,272 tests** across six projects:
 
 | Project | Tests | Scope |
 |---|---|---|
 | `OpsFlow.Domain.UnitTests` | 70 | Entity invariants and validation |
-| `OpsFlow.Application.UnitTests` | 535 | Service orchestration, RAG paths, telemetry |
+| `OpsFlow.Application.UnitTests` | 556 | Service orchestration, RAG paths, telemetry |
 | `OpsFlow.Infrastructure.UnitTests` | 224 | Repositories, adapters, EF Core mappings |
 | `OpsFlow.Api.IntegrationTests` | 356 | Full HTTP pipeline with Testcontainers SQL Server |
 | `OpsFlow.Evaluation.UnitTests` | 66 | Retrieval metrics (MRR, NDCG, Recall) |
 
-**CI results (after PR #31):** 1,250 passed, 1 skipped.
+**CI results (after PR #32):** 1,271 passed, 1 skipped.
 
 The single skipped test
 (`RealBedrockRerankedEvaluationTests`) requires live AWS credentials and a SQL
@@ -384,9 +383,6 @@ The following are known gaps, documented here for transparency:
 - **No CORS configuration** — frontend-backend integration currently works
   through the Vite development proxy
 - **No rate limiting**
-- **No automated document ingestion** — uploading a document does not
-  automatically trigger extraction, chunking, or embedding; each step must be
-  invoked individually via its API endpoint before the document is searchable
 - **No endpoint-level role enforcement** — roles are defined, seeded, and
   carried in JWTs, but all protected endpoints use bare `[Authorize]` with no
   role or policy checks
@@ -406,7 +402,7 @@ The following are known gaps, documented here for transparency:
 - **RAG pipeline engineering** — hybrid retrieval (vector + lexical + RRF),
   optional reranking with fail-open/fail-closed semantics, grounded answer
   generation with citation validation
-- **Testing discipline** — 1,251 tests across unit, integration, and
+- **Testing discipline** — 1,272 tests across unit, integration, and
   evaluation layers; Testcontainers for database-realistic integration tests
 - **Continuous integration** — automated build, lint, and test gates on every
   change
