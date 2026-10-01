@@ -25,7 +25,7 @@ public sealed class UploadDocumentServiceTests
     private static UploadDocumentCommand ValidCommand(
         Guid? orgId = null,
         Guid? projectId = null,
-        string fileName = "report.pdf",
+        string fileName = "report.txt",
         string? reportedMime = "USE_DEFAULT",
         long sizeBytes = 1024,
         Stream? content = null)
@@ -139,9 +139,9 @@ public sealed class UploadDocumentServiceTests
     {
         var (service, _, docs, _, _) = CreateService();
         var result = await service.UploadAsync(
-            ValidCommand(fileName: "../../../etc/passwd.pdf"), CancellationToken.None);
+            ValidCommand(fileName: "../../../etc/passwd.txt"), CancellationToken.None);
         Assert.True(result.Succeeded);
-        Assert.Equal("passwd.pdf", docs.Added[0].OriginalFileName);
+        Assert.Equal("passwd.txt", docs.Added[0].OriginalFileName);
     }
 
     [Fact]
@@ -149,9 +149,9 @@ public sealed class UploadDocumentServiceTests
     {
         var (service, _, docs, _, _) = CreateService();
         var result = await service.UploadAsync(
-            ValidCommand(fileName: @"C:\Users\attacker\invoice.pdf"), CancellationToken.None);
+            ValidCommand(fileName: @"C:\Users\attacker\invoice.txt"), CancellationToken.None);
         Assert.True(result.Succeeded);
-        Assert.Equal("invoice.pdf", docs.Added[0].OriginalFileName);
+        Assert.Equal("invoice.txt", docs.Added[0].OriginalFileName);
     }
 
     // ================================================================
@@ -176,7 +176,6 @@ public sealed class UploadDocumentServiceTests
     }
 
     [Theory]
-    [InlineData("report.pdf")]
     [InlineData("notes.txt")]
     [InlineData("contract.docx")]
     public async Task Supported_extensions_are_accepted(string fileName)
@@ -190,7 +189,7 @@ public sealed class UploadDocumentServiceTests
     public async Task Extension_check_is_case_insensitive()
     {
         var (service, _, _, _, _) = CreateService();
-        var result = await service.UploadAsync(ValidCommand(fileName: "REPORT.PDF"), CancellationToken.None);
+        var result = await service.UploadAsync(ValidCommand(fileName: "REPORT.TXT"), CancellationToken.None);
         Assert.True(result.Succeeded);
     }
 
@@ -243,7 +242,7 @@ public sealed class UploadDocumentServiceTests
     {
         var (service, _, _, _, _) = CreateService();
         var result = await service.UploadAsync(
-            ValidCommand(reportedMime: "application/pdf"), CancellationToken.None);
+            ValidCommand(reportedMime: "text/plain"), CancellationToken.None);
         Assert.True(result.Succeeded);
     }
 
@@ -290,7 +289,7 @@ public sealed class UploadDocumentServiceTests
         var (service, _, docs, _, _) = CreateService();
         _ = await service.UploadAsync(
             ValidCommand(reportedMime: "application/octet-stream"), CancellationToken.None);
-        Assert.Equal("application/pdf", docs.Added[0].ContentType);
+        Assert.Equal("text/plain", docs.Added[0].ContentType);
     }
 
     // ================================================================
@@ -339,8 +338,8 @@ public sealed class UploadDocumentServiceTests
     {
         var (service, _, docs, _, _) = CreateService();
         _ = await service.UploadAsync(
-            ValidCommand(fileName: "C:\\Users\\evil\\..\\report.pdf"), CancellationToken.None);
-        Assert.Equal("report.pdf", docs.Added[0].OriginalFileName);
+            ValidCommand(fileName: "C:\\Users\\evil\\..\\report.txt"), CancellationToken.None);
+        Assert.Equal("report.txt", docs.Added[0].OriginalFileName);
     }
 
     [Fact]
@@ -368,8 +367,8 @@ public sealed class UploadDocumentServiceTests
     public async Task Duplicate_original_filenames_are_valid()
     {
         var (service, _, docs, _, _) = CreateService();
-        _ = await service.UploadAsync(ValidCommand(fileName: "report.pdf"), CancellationToken.None);
-        _ = await service.UploadAsync(ValidCommand(fileName: "report.pdf"), CancellationToken.None);
+        _ = await service.UploadAsync(ValidCommand(fileName: "report.txt"), CancellationToken.None);
+        _ = await service.UploadAsync(ValidCommand(fileName: "report.txt"), CancellationToken.None);
         Assert.Equal(2, docs.Added.Count);
         Assert.NotEqual(docs.Added[0].Id, docs.Added[1].Id);
     }

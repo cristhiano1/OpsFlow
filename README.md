@@ -95,11 +95,12 @@ for authentication concurrency control.
 
 ### Documents
 
-- Upload with content-type validation (25 MiB file size limit)
+- Upload with content-type validation (plain text and DOCX; 25 MiB file size limit)
 - Automatic ingestion on upload: `IngestDocumentService` orchestrates text
   extraction, chunking, and embedding generation synchronously after the file
   is stored, so documents are indexed and searchable immediately
-- Text extraction: plain text and DOCX (via OpenXml)
+- Text extraction: plain text and DOCX (via OpenXml); only formats with a
+  registered extractor are accepted for upload
 - Deterministic overlapping chunking with configurable parameters
 - Embedding generation: OpenAI `text-embedding-3-small` (1536 dimensions,
   batch size 60)

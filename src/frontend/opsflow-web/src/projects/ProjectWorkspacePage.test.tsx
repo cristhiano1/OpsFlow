@@ -64,8 +64,8 @@ function renderWithRouter(initialPath: string) {
   return { ...render(<RouterProvider router={router} />), router }
 }
 
-function makePdf(name = 'file.pdf', size = 1024) {
-  return new File([new Uint8Array(size)], name, { type: 'application/pdf' })
+function makeTxt(name = 'file.txt', size = 1024) {
+  return new File([new Uint8Array(size)], name, { type: 'text/plain' })
 }
 
 function makeDocApiError(status: number, msg: string | null = null) {
@@ -152,11 +152,11 @@ describe('Document list rendering', () => {
     })
   })
 
-  it('renders PDF content type as "PDF"', async () => {
+  it('renders PDF content type as "Document" (legacy format)', async () => {
     mockListDocuments.mockResolvedValue({ items: [SAMPLE_DOC] })
     renderWorkspace()
     await waitFor(() => {
-      expect(screen.getByText('PDF')).toBeInTheDocument()
+      expect(screen.getByText('Document')).toBeInTheDocument()
     })
   })
 
@@ -251,13 +251,13 @@ describe('Upload form accessibility', () => {
     expect(screen.getByLabelText('Choose file')).toBeInTheDocument()
   })
 
-  it('file input accept attribute includes pdf txt docx', async () => {
+  it('file input accept attribute includes txt and docx', async () => {
     mockListDocuments.mockResolvedValue({ items: [] })
     renderWorkspace()
     await waitFor(() =>
       expect(screen.queryByText('Loading documents…')).not.toBeInTheDocument(),
     )
-    expect(screen.getByLabelText('Choose file')).toHaveAttribute('accept', '.pdf,.txt,.docx')
+    expect(screen.getByLabelText('Choose file')).toHaveAttribute('accept', '.txt,.docx')
   })
 
   it('upload button is disabled when no file is selected', async () => {
@@ -281,7 +281,7 @@ describe('Client-side validation', () => {
       expect(screen.queryByText('Loading documents…')).not.toBeInTheDocument(),
     )
 
-    const file = new File([], 'empty.pdf', { type: 'application/pdf' })
+    const file = new File([], 'empty.txt', { type: 'text/plain' })
     await user.upload(screen.getByLabelText('Choose file'), file)
     await user.click(screen.getByRole('button', { name: 'Upload' }))
 
@@ -301,8 +301,8 @@ describe('Client-side validation', () => {
 
     const oversized = new File(
       [new Uint8Array(25 * 1024 * 1024 + 1)],
-      'big.pdf',
-      { type: 'application/pdf' },
+      'big.txt',
+      { type: 'text/plain' },
     )
     await user.upload(screen.getByLabelText('Choose file'), oversized)
     await user.click(screen.getByRole('button', { name: 'Upload' }))
@@ -334,7 +334,7 @@ describe('Client-side validation', () => {
     })
   })
 
-  it('accepts uppercase .PDF extension (case-insensitive)', async () => {
+  it('accepts uppercase .TXT extension (case-insensitive)', async () => {
     const user = userEvent.setup()
     mockListDocuments
       .mockResolvedValueOnce({ items: [] })
@@ -345,7 +345,7 @@ describe('Client-side validation', () => {
       expect(screen.queryByText('Loading documents…')).not.toBeInTheDocument(),
     )
 
-    const file = new File([new Uint8Array(100)], 'REPORT.PDF', { type: 'application/pdf' })
+    const file = new File([new Uint8Array(100)], 'REPORT.TXT', { type: 'text/plain' })
     await user.upload(screen.getByLabelText('Choose file'), file)
     await user.click(screen.getByRole('button', { name: 'Upload' }))
 
@@ -365,7 +365,7 @@ describe('Client-side validation', () => {
       expect(screen.queryByText('Loading documents…')).not.toBeInTheDocument(),
     )
 
-    const file = new File([new Uint8Array(1)], 'limit.pdf', { type: 'application/pdf' })
+    const file = new File([new Uint8Array(1)], 'limit.txt', { type: 'text/plain' })
     Object.defineProperty(file, 'size', { value: 25 * 1024 * 1024 })
     await user.upload(screen.getByLabelText('Choose file'), file)
     await user.click(screen.getByRole('button', { name: 'Upload' }))
@@ -391,7 +391,7 @@ describe('Upload success flow', () => {
       expect(screen.getByText('No documents yet. Upload one above.')).toBeInTheDocument(),
     )
 
-    await user.upload(screen.getByLabelText('Choose file'), makePdf())
+    await user.upload(screen.getByLabelText('Choose file'), makeTxt())
     await user.click(screen.getByRole('button', { name: 'Upload' }))
 
     await waitFor(() => {
@@ -459,7 +459,7 @@ describe('Upload success flow', () => {
       expect(screen.getByText('No documents yet. Upload one above.')).toBeInTheDocument(),
     )
 
-    await user.upload(screen.getByLabelText('Choose file'), makePdf())
+    await user.upload(screen.getByLabelText('Choose file'), makeTxt())
     await user.click(screen.getByRole('button', { name: 'Upload' }))
 
     await waitFor(() => {
@@ -479,7 +479,7 @@ describe('Upload success flow', () => {
     )
 
     const input = screen.getByLabelText('Choose file') as HTMLInputElement
-    await user.upload(input, makePdf())
+    await user.upload(input, makeTxt())
     await user.click(screen.getByRole('button', { name: 'Upload' }))
 
     await waitFor(() => {
@@ -501,7 +501,7 @@ describe('Uploading state', () => {
       expect(screen.getByText('No documents yet. Upload one above.')).toBeInTheDocument(),
     )
 
-    await user.upload(screen.getByLabelText('Choose file'), makePdf())
+    await user.upload(screen.getByLabelText('Choose file'), makeTxt())
     await user.click(screen.getByRole('button', { name: 'Upload' }))
 
     expect(screen.getByRole('button', { name: /Uploading/ })).toBeDisabled()
@@ -516,7 +516,7 @@ describe('Uploading state', () => {
       expect(screen.getByText('No documents yet. Upload one above.')).toBeInTheDocument(),
     )
 
-    await user.upload(screen.getByLabelText('Choose file'), makePdf())
+    await user.upload(screen.getByLabelText('Choose file'), makeTxt())
     await user.click(screen.getByRole('button', { name: 'Upload' }))
     await user.click(screen.getByRole('button', { name: /Uploading/ }))
 
@@ -535,7 +535,7 @@ describe('Upload error handling', () => {
     await waitFor(() =>
       expect(screen.getByText('No documents yet. Upload one above.')).toBeInTheDocument(),
     )
-    await user.upload(screen.getByLabelText('Choose file'), makePdf())
+    await user.upload(screen.getByLabelText('Choose file'), makeTxt())
     await user.click(screen.getByRole('button', { name: 'Upload' }))
   }
 
@@ -589,7 +589,7 @@ describe('Upload error handling', () => {
       expect(screen.getByText('report.pdf')).toBeInTheDocument()
     })
 
-    await user.upload(screen.getByLabelText('Choose file'), makePdf())
+    await user.upload(screen.getByLabelText('Choose file'), makeTxt())
     await user.click(screen.getByRole('button', { name: 'Upload' }))
 
     await waitFor(() => {
@@ -613,7 +613,7 @@ describe('Upload succeeds but refresh fails', () => {
       expect(screen.getByText('No documents yet. Upload one above.')).toBeInTheDocument(),
     )
 
-    await user.upload(screen.getByLabelText('Choose file'), makePdf())
+    await user.upload(screen.getByLabelText('Choose file'), makeTxt())
     await user.click(screen.getByRole('button', { name: 'Upload' }))
 
     await waitFor(() => {
@@ -636,7 +636,7 @@ describe('Upload succeeds but refresh fails', () => {
       expect(screen.getByText('No documents yet. Upload one above.')).toBeInTheDocument(),
     )
 
-    await user.upload(screen.getByLabelText('Choose file'), makePdf())
+    await user.upload(screen.getByLabelText('Choose file'), makeTxt())
     await user.click(screen.getByRole('button', { name: 'Upload' }))
 
     await waitFor(() => {
@@ -674,7 +674,7 @@ describe('Race safety: stale load guards', () => {
     renderWorkspace()
     expect(screen.getByText('Loading documents…')).toBeInTheDocument()
 
-    await user.upload(screen.getByLabelText('Choose file'), makePdf())
+    await user.upload(screen.getByLabelText('Choose file'), makeTxt())
     await user.click(screen.getByRole('button', { name: 'Upload' }))
 
     postUploadLoad.resolve({ items: [SAMPLE_DOC] })
@@ -711,7 +711,7 @@ describe('Race safety: stale load guards', () => {
 
     renderWorkspace()
 
-    await user.upload(screen.getByLabelText('Choose file'), makePdf())
+    await user.upload(screen.getByLabelText('Choose file'), makeTxt())
     await user.click(screen.getByRole('button', { name: 'Upload' }))
 
     await waitFor(() => {
@@ -790,7 +790,7 @@ describe('Race safety: projectId change (A -> B navigation)', () => {
       expect(screen.getByText('No documents yet. Upload one above.')).toBeInTheDocument(),
     )
 
-    await user.upload(screen.getByLabelText('Choose file'), makePdf())
+    await user.upload(screen.getByLabelText('Choose file'), makeTxt())
     await user.click(screen.getByRole('button', { name: 'Upload' }))
 
     await act(async () => {
@@ -835,7 +835,7 @@ describe('Race safety: projectId change (A -> B navigation)', () => {
       expect(screen.getByText('No documents yet. Upload one above.')).toBeInTheDocument(),
     )
 
-    await user.upload(screen.getByLabelText('Choose file'), makePdf())
+    await user.upload(screen.getByLabelText('Choose file'), makeTxt())
     await user.click(screen.getByRole('button', { name: 'Upload' }))
 
     await act(async () => {

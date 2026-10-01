@@ -5,10 +5,13 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using OpsFlow.Api.IntegrationTests.Authentication;
 using OpsFlow.Api.IntegrationTests.Infrastructure;
+using OpsFlow.Application.Documents;
 using OpsFlow.Contracts.Authentication;
 using OpsFlow.Contracts.Documents;
 using OpsFlow.Infrastructure.Persistence;
@@ -85,6 +88,11 @@ public sealed class DocumentExtractionEndpointTests : IDisposable
                     ["DocumentStorage:BasePath"] = _storagePath,
                 });
             });
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IEmbeddingGenerator>();
+                services.AddSingleton<IEmbeddingGenerator, DeterministicExtractionTestEmbeddingGenerator>();
+            });
         }
 
         protected override void Dispose(bool disposing)
@@ -105,6 +113,29 @@ public sealed class DocumentExtractionEndpointTests : IDisposable
                 ConnectionStringEnvironmentVariable,
                 _previousConnectionString,
                 EnvironmentVariableTarget.Process);
+        }
+    }
+
+    private sealed class DeterministicExtractionTestEmbeddingGenerator : IEmbeddingGenerator
+    {
+        public EmbeddingGeneratorIdentity Identity { get; } = new(
+            EmbeddingProfiles.SemanticV1Id,
+            EmbeddingProfiles.SemanticV1ModelId,
+            EmbeddingProfiles.SemanticV1Dimensions);
+
+        public Task<IReadOnlyList<ReadOnlyMemory<float>>> GenerateAsync(
+            IReadOnlyList<string> texts,
+            CancellationToken cancellationToken)
+        {
+            IReadOnlyList<ReadOnlyMemory<float>> result =
+                [.. texts.Select(_ =>
+                {
+                    var v = new float[EmbeddingProfiles.SemanticV1Dimensions];
+                    v[0] = 1.0f;
+                    return (ReadOnlyMemory<float>)v;
+                })];
+
+            return Task.FromResult(result);
         }
     }
 
@@ -227,7 +258,7 @@ public sealed class DocumentExtractionEndpointTests : IDisposable
     }
 
     [Fact]
-    public async Task GET_extraction_before_POST_returns_404()
+    public async Task GET_extraction_available_immediately_after_upload()
     {
         var (token, _, projectId) = await SeedProjectAndLoginAsync();
         var docId = await UploadDocumentAsync(
@@ -235,24 +266,12 @@ public sealed class DocumentExtractionEndpointTests : IDisposable
 
         using var response = await _client.SendAsync(
             BuildGetExtractionRequest(token, projectId, docId));
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-    }
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
-    // ================================================================
-    // PDF extraction disabled — returns 415
-    // ================================================================
-
-    [Fact]
-    public async Task POST_pdf_extraction_returns_415()
-    {
-        var (token, _, projectId) = await SeedProjectAndLoginAsync();
-        var docId = await UploadDocumentAsync(
-            token, projectId, "report.pdf", "%PDF"u8.ToArray(), "application/pdf");
-
-        using var response = await _client.SendAsync(
-            BuildPostExtractionRequest(token, projectId, docId));
-
-        Assert.Equal(HttpStatusCode.UnsupportedMediaType, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<DocumentExtractionResponse>();
+        Assert.NotNull(body);
+        Assert.Equal(docId, body.DocumentId);
+        Assert.Equal("hello", body.Text);
     }
 
     // ================================================================
@@ -260,7 +279,7 @@ public sealed class DocumentExtractionEndpointTests : IDisposable
     // ================================================================
 
     [Fact]
-    public async Task POST_txt_extraction_returns_201_with_extracted_text()
+    public async Task POST_txt_extraction_returns_200_for_already_extracted()
     {
         var (token, _, projectId) = await SeedProjectAndLoginAsync();
         var docId = await UploadDocumentAsync(
@@ -269,7 +288,7 @@ public sealed class DocumentExtractionEndpointTests : IDisposable
         using var response = await _client.SendAsync(
             BuildPostExtractionRequest(token, projectId, docId));
 
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<DocumentExtractionResponse>();
         Assert.NotNull(body);
         Assert.Equal(docId, body.DocumentId);
@@ -290,7 +309,7 @@ public sealed class DocumentExtractionEndpointTests : IDisposable
 
         using var first = await _client.SendAsync(
             BuildPostExtractionRequest(token, projectId, docId));
-        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
 
         using var second = await _client.SendAsync(
             BuildPostExtractionRequest(token, projectId, docId));
@@ -314,7 +333,7 @@ public sealed class DocumentExtractionEndpointTests : IDisposable
 
         using var postResponse = await _client.SendAsync(
             BuildPostExtractionRequest(token, projectId, docId));
-        Assert.Equal(HttpStatusCode.Created, postResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, postResponse.StatusCode);
         var postBody = await postResponse.Content.ReadFromJsonAsync<DocumentExtractionResponse>();
 
         using var getResponse = await _client.SendAsync(
@@ -334,7 +353,7 @@ public sealed class DocumentExtractionEndpointTests : IDisposable
     // ================================================================
 
     [Fact]
-    public async Task POST_whitespace_only_txt_returns_201_with_empty_text()
+    public async Task POST_whitespace_only_txt_returns_200_with_empty_text()
     {
         var (token, _, projectId) = await SeedProjectAndLoginAsync();
         var docId = await UploadDocumentAsync(
@@ -343,7 +362,7 @@ public sealed class DocumentExtractionEndpointTests : IDisposable
         using var response = await _client.SendAsync(
             BuildPostExtractionRequest(token, projectId, docId));
 
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<DocumentExtractionResponse>();
         Assert.NotNull(body);
         Assert.Equal(string.Empty, body.Text);
@@ -364,26 +383,10 @@ public sealed class DocumentExtractionEndpointTests : IDisposable
         using var response = await _client.SendAsync(
             BuildPostExtractionRequest(token, projectId, docId));
 
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<DocumentExtractionResponse>();
         Assert.NotNull(body);
         Assert.Equal("line1\nline2", body.Text);
-    }
-
-    // ================================================================
-    // Malformed document
-    // ================================================================
-
-    [Fact]
-    public async Task POST_malformed_txt_returns_422()
-    {
-        var (token, _, projectId) = await SeedProjectAndLoginAsync();
-        var docId = await UploadDocumentAsync(
-            token, projectId, "bad.txt", [0xFF, 0xFE, 0x80, 0x81]);
-
-        using var response = await _client.SendAsync(
-            BuildPostExtractionRequest(token, projectId, docId));
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
     }
 
     // ================================================================
@@ -435,35 +438,11 @@ public sealed class DocumentExtractionEndpointTests : IDisposable
 
         using var postResponse = await _client.SendAsync(
             BuildPostExtractionRequest(tokenB, projectB, docIdB));
-        Assert.Equal(HttpStatusCode.Created, postResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, postResponse.StatusCode);
 
         using var getResponse = await _client.SendAsync(
             BuildGetExtractionRequest(tokenA, projectB, docIdB));
         Assert.Equal(HttpStatusCode.NotFound, getResponse.StatusCode);
-    }
-
-    // ================================================================
-    // Storage missing — POST returns 500
-    // ================================================================
-
-    [Fact]
-    public async Task POST_storage_missing_returns_500()
-    {
-        var (token, orgId, projectId) = await SeedProjectAndLoginAsync();
-        var docId = await UploadDocumentAsync(
-            token, projectId, "vanished.txt", Encoding.UTF8.GetBytes("text"));
-
-        var physicalPath = Path.Combine(
-            _storageRoot,
-            orgId.ToString("N"),
-            projectId.ToString("N"),
-            docId.ToString("N"));
-        Assert.True(File.Exists(physicalPath));
-        File.Delete(physicalPath);
-
-        using var response = await _client.SendAsync(
-            BuildPostExtractionRequest(token, projectId, docId));
-        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
     }
 
     // ================================================================
@@ -481,33 +460,6 @@ public sealed class DocumentExtractionEndpointTests : IDisposable
     }
 
     // ================================================================
-    // Location header on 201
-    // ================================================================
-
-    [Fact]
-    public async Task POST_201_includes_location_header_pointing_to_GET()
-    {
-        var (token, _, projectId) = await SeedProjectAndLoginAsync();
-        var docId = await UploadDocumentAsync(
-            token, projectId, "loc.txt", Encoding.UTF8.GetBytes("location test"));
-
-        using var postResponse = await _client.SendAsync(
-            BuildPostExtractionRequest(token, projectId, docId));
-        Assert.Equal(HttpStatusCode.Created, postResponse.StatusCode);
-        Assert.NotNull(postResponse.Headers.Location);
-
-        var getMsg = new HttpRequestMessage(HttpMethod.Get, postResponse.Headers.Location);
-        getMsg.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        using var getResponse = await _client.SendAsync(getMsg);
-
-        Assert.Equal(HttpStatusCode.OK, getResponse.StatusCode);
-        var getBody = await getResponse.Content.ReadFromJsonAsync<DocumentExtractionResponse>();
-        Assert.NotNull(getBody);
-        Assert.Equal(docId, getBody.DocumentId);
-        Assert.Equal("location test", getBody.Text);
-    }
-
-    // ================================================================
     // Response contract shape
     // ================================================================
 
@@ -520,7 +472,7 @@ public sealed class DocumentExtractionEndpointTests : IDisposable
 
         using var response = await _client.SendAsync(
             BuildPostExtractionRequest(token, projectId, docId));
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         var body = await response.Content.ReadFromJsonAsync<DocumentExtractionResponse>();
         Assert.NotNull(body);

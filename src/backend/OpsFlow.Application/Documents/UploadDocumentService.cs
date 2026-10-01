@@ -16,7 +16,6 @@ public sealed class UploadDocumentService
 
     private static readonly Dictionary<string, string> AllowedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        [".pdf"] = "application/pdf",
         [".txt"] = "text/plain",
         [".docx"] = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     };
