@@ -77,7 +77,8 @@ builder.Services.AddScoped(serviceProvider =>
         serviceProvider.GetRequiredService<SearchDocumentChunksHybridService>(),
         () => serviceProvider.GetRequiredService<SearchDocumentChunksRerankedService>(),
         serviceProvider.GetRequiredService<IGroundedAnswerGenerator>(),
-        answerRetrievalPolicy);
+        answerRetrievalPolicy,
+        serviceProvider.GetRequiredService<IGroundedAnswerTelemetry>());
 });
 
 var app = builder.Build();
