@@ -329,7 +329,7 @@ describe('Client-side validation', () => {
     expect(mockUploadDocument).not.toHaveBeenCalled()
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent(
-        'Only PDF, TXT, and DOCX files are supported.',
+        'Only TXT and DOCX files are supported.',
       )
     })
   })

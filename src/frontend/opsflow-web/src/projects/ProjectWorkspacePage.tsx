@@ -60,7 +60,7 @@ function validateFile(file: File): string | null {
   if (file.size > MAX_FILE_SIZE) return 'File exceeds the 25 MiB limit.'
   const ext = getFileExtension(file.name)
   if (!ALLOWED_EXTENSIONS.has(ext)) {
-    return 'Only PDF, TXT, and DOCX files are supported.'
+    return 'Only TXT and DOCX files are supported.'
   }
   return null
 }
