@@ -44,6 +44,19 @@ public sealed class CorsTests : IDisposable
     }
 
     [Fact]
+    public async Task Allowed_origin_receives_credentials_header()
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, "/health/live");
+        request.Headers.Add("Origin", AllowedOrigin);
+
+        var response = await _client.SendAsync(request);
+
+        Assert.True(response.Headers.Contains("Access-Control-Allow-Credentials"));
+        var value = response.Headers.GetValues("Access-Control-Allow-Credentials").Single();
+        Assert.Equal("true", value);
+    }
+
+    [Fact]
     public async Task Disallowed_origin_does_not_receive_cors_headers()
     {
         var request = new HttpRequestMessage(HttpMethod.Get, "/health/live");
@@ -52,6 +65,7 @@ public sealed class CorsTests : IDisposable
         var response = await _client.SendAsync(request);
 
         Assert.False(response.Headers.Contains("Access-Control-Allow-Origin"));
+        Assert.False(response.Headers.Contains("Access-Control-Allow-Credentials"));
     }
 
     [Fact]
@@ -66,6 +80,7 @@ public sealed class CorsTests : IDisposable
 
         Assert.True(response.Headers.Contains("Access-Control-Allow-Origin"));
         Assert.True(response.Headers.Contains("Access-Control-Allow-Methods"));
+        Assert.True(response.Headers.Contains("Access-Control-Allow-Credentials"));
     }
 
     [Fact]
