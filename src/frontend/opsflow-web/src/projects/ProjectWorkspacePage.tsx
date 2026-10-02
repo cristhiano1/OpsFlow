@@ -9,7 +9,7 @@ import {
 } from './documentsApi'
 import './ProjectWorkspacePage.css'
 
-const ALLOWED_EXTENSIONS = new Set(['.pdf', '.txt', '.docx'])
+const ALLOWED_EXTENSIONS = new Set(['.txt', '.docx'])
 const MAX_FILE_SIZE = 25 * 1024 * 1024
 
 type PageState =
@@ -38,8 +38,6 @@ function formatFileSize(bytes: number): string {
 
 function formatContentType(contentType: string): string {
   switch (contentType) {
-    case 'application/pdf':
-      return 'PDF'
     case 'text/plain':
       return 'Text'
     case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
@@ -62,7 +60,7 @@ function validateFile(file: File): string | null {
   if (file.size > MAX_FILE_SIZE) return 'File exceeds the 25 MiB limit.'
   const ext = getFileExtension(file.name)
   if (!ALLOWED_EXTENSIONS.has(ext)) {
-    return 'Only PDF, TXT, and DOCX files are supported.'
+    return 'Only TXT and DOCX files are supported.'
   }
   return null
 }
@@ -221,7 +219,7 @@ export function ProjectWorkspacePage() {
             id="document-file-input"
             ref={fileInputRef}
             type="file"
-            accept=".pdf,.txt,.docx"
+            accept=".txt,.docx"
             className="workspace-upload-input"
             disabled={uploading}
             onChange={handleFileChange}

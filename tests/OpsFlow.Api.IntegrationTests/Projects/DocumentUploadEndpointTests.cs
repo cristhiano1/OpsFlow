@@ -3,12 +3,18 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using OpsFlow.Api.IntegrationTests.Authentication;
 using OpsFlow.Api.IntegrationTests.Infrastructure;
+using OpsFlow.Application.Documents;
 using OpsFlow.Contracts.Authentication;
 using OpsFlow.Contracts.Documents;
 using OpsFlow.Infrastructure.Persistence;
@@ -85,6 +91,11 @@ public sealed class DocumentUploadEndpointTests : IDisposable
                     ["DocumentStorage:BasePath"] = _storagePath,
                 });
             });
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IEmbeddingGenerator>();
+                services.AddSingleton<IEmbeddingGenerator, DeterministicUploadTestEmbeddingGenerator>();
+            });
         }
 
         protected override void Dispose(bool disposing)
@@ -155,7 +166,7 @@ public sealed class DocumentUploadEndpointTests : IDisposable
     private static MultipartFormDataContent CreateFileContent(
         string fileName,
         byte[] data,
-        string contentType = "application/pdf")
+        string contentType = "text/plain")
     {
         var content = new MultipartFormDataContent();
         var fileContent = new ByteArrayContent(data);
@@ -169,7 +180,7 @@ public sealed class DocumentUploadEndpointTests : IDisposable
         Guid projectId,
         string fileName,
         byte[] data,
-        string contentType = "application/pdf")
+        string contentType = "text/plain")
     {
         var msg = new HttpRequestMessage(HttpMethod.Post, DocumentsPath(projectId))
         {
@@ -186,6 +197,20 @@ public sealed class DocumentUploadEndpointTests : IDisposable
         return msg;
     }
 
+    private static byte[] CreateMinimalDocx(string text = "test")
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(
+                new Body(new Paragraph(new Run(new Text(text)))));
+            mainPart.Document.Save();
+        }
+
+        return ms.ToArray();
+    }
+
     // ================================================================
     // Unauthenticated
     // ================================================================
@@ -193,7 +218,7 @@ public sealed class DocumentUploadEndpointTests : IDisposable
     [Fact]
     public async Task Upload_without_bearer_returns_401()
     {
-        var content = CreateFileContent("test.pdf", [0x01]);
+        var content = CreateFileContent("test.txt", [0x01]);
         using var msg = new HttpRequestMessage(HttpMethod.Post, DocumentsPath(Guid.NewGuid()))
         {
             Content = content,
@@ -207,21 +232,21 @@ public sealed class DocumentUploadEndpointTests : IDisposable
     // ================================================================
 
     [Fact]
-    public async Task Valid_pdf_upload_returns_201_with_metadata()
+    public async Task Valid_txt_upload_returns_201_with_metadata()
     {
         var (token, _, projectId) = await SeedProjectAndLoginAsync();
-        var data = "%PDF"u8.ToArray();
+        var data = "Hello, world!"u8.ToArray();
 
         using var response = await _client.SendAsync(
-            BuildUploadRequest(token, projectId, "report.pdf", data));
+            BuildUploadRequest(token, projectId, "report.txt", data));
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
 
         var doc = await response.Content.ReadFromJsonAsync<DocumentResponse>();
         Assert.NotNull(doc);
         Assert.NotEqual(Guid.Empty, doc.Id);
-        Assert.Equal("report.pdf", doc.OriginalFileName);
-        Assert.Equal("application/pdf", doc.ContentType);
+        Assert.Equal("report.txt", doc.OriginalFileName);
+        Assert.Equal("text/plain", doc.ContentType);
         Assert.Equal(data.Length, doc.SizeBytes);
     }
 
@@ -246,7 +271,7 @@ public sealed class DocumentUploadEndpointTests : IDisposable
     public async Task Valid_docx_upload_returns_201()
     {
         var (token, _, projectId) = await SeedProjectAndLoginAsync();
-        var data = new byte[] { 0x50, 0x4B, 0x03, 0x04 };
+        var data = CreateMinimalDocx("contract content");
         var docxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
         using var response = await _client.SendAsync(
@@ -270,7 +295,7 @@ public sealed class DocumentUploadEndpointTests : IDisposable
         var (token, _, projectId) = await SeedProjectAndLoginAsync();
 
         using var response = await _client.SendAsync(
-            BuildUploadRequest(token, projectId, "secure.pdf", [0x01]));
+            BuildUploadRequest(token, projectId, "secure.txt", [0x01]));
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
 
         var raw = await response.Content.ReadAsStringAsync();
@@ -287,10 +312,10 @@ public sealed class DocumentUploadEndpointTests : IDisposable
     public async Task Upload_bytes_actually_appear_under_configured_test_storage()
     {
         var (token, orgId, projectId) = await SeedProjectAndLoginAsync();
-        var data = new byte[] { 0xCA, 0xFE, 0xBA, 0xBE };
+        var data = "storage-check"u8.ToArray();
 
         using var response = await _client.SendAsync(
-            BuildUploadRequest(token, projectId, "check.pdf", data));
+            BuildUploadRequest(token, projectId, "check.txt", data));
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
 
         var doc = await response.Content.ReadFromJsonAsync<DocumentResponse>();
@@ -317,7 +342,7 @@ public sealed class DocumentUploadEndpointTests : IDisposable
         var (token, _, projectId) = await SeedProjectAndLoginAsync();
 
         using var uploadResponse = await _client.SendAsync(
-            BuildUploadRequest(token, projectId, "visible.pdf", [0x01]));
+            BuildUploadRequest(token, projectId, "visible.txt", [0x01]));
         Assert.Equal(HttpStatusCode.Created, uploadResponse.StatusCode);
 
         using var listResponse = await _client.SendAsync(BuildListRequest(token, projectId));
@@ -325,7 +350,7 @@ public sealed class DocumentUploadEndpointTests : IDisposable
 
         var list = await listResponse.Content.ReadFromJsonAsync<DocumentListResponse>();
         Assert.NotNull(list);
-        Assert.Contains(list.Items, d => d.OriginalFileName == "visible.pdf");
+        Assert.Contains(list.Items, d => d.OriginalFileName == "visible.txt");
     }
 
     // ================================================================
@@ -342,7 +367,7 @@ public sealed class DocumentUploadEndpointTests : IDisposable
         var token = await LoginAsync(user.Email!);
 
         using var response = await _client.SendAsync(
-            BuildUploadRequest(token, Guid.NewGuid(), "test.pdf", [0x01]));
+            BuildUploadRequest(token, Guid.NewGuid(), "test.txt", [0x01]));
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
@@ -362,7 +387,7 @@ public sealed class DocumentUploadEndpointTests : IDisposable
         var projectB = await SeedProjectAsync(scope.ServiceProvider, orgB.Id);
 
         using var response = await _client.SendAsync(
-            BuildUploadRequest(tokenA, projectB, "cross.pdf", [0x01]));
+            BuildUploadRequest(tokenA, projectB, "cross.txt", [0x01]));
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
@@ -391,7 +416,7 @@ public sealed class DocumentUploadEndpointTests : IDisposable
         var (token, _, projectId) = await SeedProjectAndLoginAsync();
 
         using var response = await _client.SendAsync(
-            BuildUploadRequest(token, projectId, "empty.pdf", []));
+            BuildUploadRequest(token, projectId, "empty.txt", []));
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
@@ -411,7 +436,7 @@ public sealed class DocumentUploadEndpointTests : IDisposable
         var (token, _, projectId) = await SeedProjectAndLoginAsync();
 
         using var response = await _client.SendAsync(
-            BuildUploadRequest(token, projectId, "report.pdf", [0x01], "text/html"));
+            BuildUploadRequest(token, projectId, "report.txt", [0x01], "text/html"));
         Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
     }
 
@@ -426,8 +451,8 @@ public sealed class DocumentUploadEndpointTests : IDisposable
 
         var content = new MultipartFormDataContent();
         var streamContent = new StreamContent(new OversizedStream(oversize));
-        streamContent.Headers.ContentType = new MediaTypeHeaderValue("application/pdf");
-        content.Add(streamContent, "file", "huge.pdf");
+        streamContent.Headers.ContentType = new MediaTypeHeaderValue("text/plain");
+        content.Add(streamContent, "file", "huge.txt");
         msg.Content = content;
 
         using var response = await _client.SendAsync(msg);
@@ -444,11 +469,11 @@ public sealed class DocumentUploadEndpointTests : IDisposable
         var (token, _, projectId) = await SeedProjectAndLoginAsync();
 
         using var r1 = await _client.SendAsync(
-            BuildUploadRequest(token, projectId, "same.pdf", [0x01]));
+            BuildUploadRequest(token, projectId, "same.txt", [0x01]));
         Assert.Equal(HttpStatusCode.Created, r1.StatusCode);
 
         using var r2 = await _client.SendAsync(
-            BuildUploadRequest(token, projectId, "same.pdf", [0x02]));
+            BuildUploadRequest(token, projectId, "same.txt", [0x02]));
         Assert.Equal(HttpStatusCode.Created, r2.StatusCode);
 
         var d1 = await r1.Content.ReadFromJsonAsync<DocumentResponse>();
@@ -468,13 +493,13 @@ public sealed class DocumentUploadEndpointTests : IDisposable
         var (token, _, projectId) = await SeedProjectAndLoginAsync();
 
         using var response = await _client.SendAsync(
-            BuildUploadRequest(token, projectId, @"C:\Users\attacker\invoice.pdf", [0x01]));
+            BuildUploadRequest(token, projectId, @"C:\Users\attacker\invoice.txt", [0x01]));
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
 
         var doc = await response.Content.ReadFromJsonAsync<DocumentResponse>();
         Assert.NotNull(doc);
-        Assert.Equal("invoice.pdf", doc.OriginalFileName);
+        Assert.Equal("invoice.txt", doc.OriginalFileName);
     }
 
     // ================================================================
@@ -496,8 +521,8 @@ public sealed class DocumentUploadEndpointTests : IDisposable
         // Send a legitimate file but sneak in a rogue organizationId form field pointing at OrgB.
         var content = new MultipartFormDataContent();
         var fileContent = new ByteArrayContent([0x01, 0x02, 0x03]);
-        fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/pdf");
-        content.Add(fileContent, "file", "legit.pdf");
+        fileContent.Headers.ContentType = new MediaTypeHeaderValue("text/plain");
+        content.Add(fileContent, "file", "legit.txt");
         content.Add(new StringContent(orgB.Id.ToString()), "organizationId");
 
         var msg = new HttpRequestMessage(HttpMethod.Post, DocumentsPath(projectA))
@@ -538,6 +563,33 @@ public sealed class DocumentUploadEndpointTests : IDisposable
 
         _ = await Assert.ThrowsAsync<Microsoft.EntityFrameworkCore.DbUpdateException>(() =>
             db.SaveChangesAsync());
+    }
+
+    // ================================================================
+    // Test fakes
+    // ================================================================
+
+    private sealed class DeterministicUploadTestEmbeddingGenerator : IEmbeddingGenerator
+    {
+        public EmbeddingGeneratorIdentity Identity { get; } = new(
+            EmbeddingProfiles.SemanticV1Id,
+            EmbeddingProfiles.SemanticV1ModelId,
+            EmbeddingProfiles.SemanticV1Dimensions);
+
+        public Task<IReadOnlyList<ReadOnlyMemory<float>>> GenerateAsync(
+            IReadOnlyList<string> texts,
+            CancellationToken cancellationToken)
+        {
+            IReadOnlyList<ReadOnlyMemory<float>> result =
+                [.. texts.Select(_ =>
+                {
+                    var v = new float[EmbeddingProfiles.SemanticV1Dimensions];
+                    v[0] = 1.0f;
+                    return (ReadOnlyMemory<float>)v;
+                })];
+
+            return Task.FromResult(result);
+        }
     }
 
     // ================================================================
