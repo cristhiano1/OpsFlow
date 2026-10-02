@@ -37,7 +37,6 @@ upload workflows.
 
 - RAG question-answering UI (backend API exists; no frontend page yet)
 - Application Dockerfiles and container orchestration
-- Health check endpoints
 - Telemetry export (metrics instruments exist but no exporter is configured)
 - Production deployment infrastructure
 
