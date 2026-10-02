@@ -334,8 +334,7 @@ secrets or environment variables — never committed):
 | `OpsFlow.Api.IntegrationTests` | 408 | Full HTTP pipeline with Testcontainers SQL Server |
 | `OpsFlow.Evaluation.UnitTests` | 66 | Retrieval metrics (MRR, NDCG, Recall) |
 
-**CI results:** 1,306 passed, 1 skipped (after PR #34; counts updated
-when CI validates the next PR).
+**CI results:** 1,322 passed, 1 skipped (after PR #35).
 
 The single skipped test
 (`RealBedrockRerankedEvaluationTests`) requires live AWS credentials and a SQL
