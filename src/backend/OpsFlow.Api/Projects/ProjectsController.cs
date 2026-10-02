@@ -14,6 +14,7 @@ public sealed class ProjectsController : ControllerBase
 {
     /// <summary>Creates a new project in the authenticated caller's organization.</summary>
     [HttpPost]
+    [Authorize(Policy = AuthorizationPolicies.ProjectManage)]
     public async Task<IActionResult> CreateAsync(
         [FromBody] CreateProjectRequest? request,
         [FromServices] CreateProjectService createProjectService,
