@@ -86,7 +86,8 @@ for authentication concurrency control.
   `GET /health/ready` (readiness, includes SQL Server connectivity);
   anonymous, no sensitive data exposed
 - **CORS** — explicit origin allowlist via configuration; no wildcard
-  production origins; Authorization header allowed for JWT bearer tokens
+  production origins; credentialed requests are allowed only for trusted origins
+  so the HttpOnly refresh-cookie flow works for same-site cross-origin deployments
 - **Rate limiting** — four named policies (AuthStrict, ApiStandard,
   RagExpensive, Upload) protect abuse-sensitive and resource-intensive
   endpoints; exceeded requests receive `429 Too Many Requests` with
@@ -401,6 +402,9 @@ The following are known gaps, documented here for transparency:
 - **No proxy-aware IP detection** — rate-limit IP partitioning uses
   `RemoteIpAddress` directly; behind a reverse proxy, forwarded-header
   middleware must be configured separately
+- **Cross-site refresh remains unsupported** — CORS allows credentials for trusted
+  origins, but the refresh cookie remains `SameSite=Strict`; deployments on a
+  different site require a separate CSRF-safe cookie/session design
 
 ## What this project demonstrates
 
