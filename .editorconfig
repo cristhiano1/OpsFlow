@@ -103,3 +103,9 @@ dotnet_diagnostic.IDE0058.severity = none
 
 [src/backend/OpsFlow.Api/Authentication/AuthenticationServiceCollectionExtensions.cs]
 dotnet_diagnostic.IDE0058.severity = none
+
+[src/backend/OpsFlow.Api/Cors/CorsServiceCollectionExtensions.cs]
+dotnet_diagnostic.IDE0058.severity = none
+
+[src/backend/OpsFlow.Api/RateLimiting/RateLimitingServiceCollectionExtensions.cs]
+dotnet_diagnostic.IDE0058.severity = none

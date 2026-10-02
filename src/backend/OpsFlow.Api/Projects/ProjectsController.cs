@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using OpsFlow.Api.RateLimiting;
 using OpsFlow.Application.Authorization;
 using OpsFlow.Application.Projects;
 using OpsFlow.Contracts.Projects;
@@ -10,6 +12,7 @@ namespace OpsFlow.Api.Projects;
 [ApiController]
 [Route("api/v1/projects")]
 [Authorize]
+[EnableRateLimiting(RateLimitPolicies.ApiStandard)]
 public sealed class ProjectsController : ControllerBase
 {
     /// <summary>Creates a new project in the authenticated caller's organization.</summary>

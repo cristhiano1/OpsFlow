@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using OpsFlow.Api.RateLimiting;
 using OpsFlow.Application.Authentication;
 using OpsFlow.Application.Authorization;
 using OpsFlow.Contracts.Authentication;
@@ -14,6 +16,7 @@ public sealed class AuthenticationController : ControllerBase
     /// <summary>Authenticates a user and returns an access token with a secure refresh-token cookie.</summary>
     [HttpPost("login")]
     [AllowAnonymous]
+    [EnableRateLimiting(RateLimitPolicies.AuthStrict)]
     public async Task<IActionResult> LoginAsync(
         [FromBody] LoginRequest? request,
         [FromServices] LoginService loginService,
@@ -68,6 +71,7 @@ public sealed class AuthenticationController : ControllerBase
     /// <summary>Rotates the caller's refresh-token session and returns a fresh access token.</summary>
     [HttpPost("refresh")]
     [AllowAnonymous]
+    [EnableRateLimiting(RateLimitPolicies.AuthStrict)]
     public async Task<IActionResult> RefreshAsync(
         [FromServices] RefreshService refreshService,
         CancellationToken cancellationToken)
@@ -127,6 +131,7 @@ public sealed class AuthenticationController : ControllerBase
     /// </summary>
     [HttpPost("logout")]
     [AllowAnonymous]
+    [EnableRateLimiting(RateLimitPolicies.AuthStrict)]
     public async Task<IActionResult> LogoutAsync(
         [FromServices] LogoutService logoutService,
         CancellationToken cancellationToken)
@@ -159,6 +164,7 @@ public sealed class AuthenticationController : ControllerBase
     /// </summary>
     [HttpGet("me")]
     [Authorize]
+    [EnableRateLimiting(RateLimitPolicies.ApiStandard)]
     [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
     public async Task<IActionResult> MeAsync(
         [FromServices] CurrentUserService currentUserService,

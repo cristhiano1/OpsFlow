@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using OpsFlow.Api.RateLimiting;
 using OpsFlow.Application.Authorization;
 using OpsFlow.Application.Documents;
 using OpsFlow.Contracts.Documents;
@@ -11,6 +13,7 @@ namespace OpsFlow.Api.Projects;
 [ApiController]
 [Route("api/v1/projects/{projectId:guid}/documents")]
 [Authorize]
+[EnableRateLimiting(RateLimitPolicies.ApiStandard)]
 public sealed class DocumentsController : ControllerBase
 {
     /// <summary>
@@ -54,6 +57,7 @@ public sealed class DocumentsController : ControllerBase
     [HttpPost]
     [RequestSizeLimit(26 * 1024 * 1024)]
     [Authorize(Policy = AuthorizationPolicies.DocumentContribute)]
+    [EnableRateLimiting(RateLimitPolicies.Upload)]
     public async Task<IActionResult> UploadAsync(
         Guid projectId,
         [FromForm] IFormFile? file,

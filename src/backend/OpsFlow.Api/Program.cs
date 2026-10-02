@@ -1,6 +1,10 @@
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using OpsFlow.Api.Authentication;
+using OpsFlow.Api.Cors;
+using OpsFlow.Api.HealthChecks;
+using OpsFlow.Api.RateLimiting;
 using OpsFlow.Application.Authentication;
 using OpsFlow.Application.Documents;
 using OpsFlow.Application.Projects;
@@ -16,6 +20,10 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddOpsFlowInfrastructure(builder.Configuration);
 builder.Services.AddOpsFlowAuthentication();
+builder.Services.AddOpsFlowCors(builder.Configuration);
+builder.Services.AddOpsFlowRateLimiting(builder.Configuration);
+builder.Services.AddHealthChecks()
+    .AddCheck<SqlServerHealthCheck>("sqlserver", tags: ["ready"]);
 builder.Services.AddScoped<LoginService>();
 builder.Services.AddScoped<RefreshService>();
 builder.Services.AddScoped<LogoutService>();
@@ -101,8 +109,21 @@ if (!app.Environment.IsDevelopment())
     app.UseHttpsRedirection();
 }
 
+app.UseCors(CorsFlowExtensions.PolicyName);
 app.UseAuthentication();
+app.UseRateLimiter();
 app.UseAuthorization();
+
+app.MapHealthChecks("/health/live", new HealthCheckOptions
+{
+    Predicate = _ => false,
+}).AllowAnonymous();
+
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("ready"),
+}).AllowAnonymous();
+
 app.MapControllers();
 
 app.Run();

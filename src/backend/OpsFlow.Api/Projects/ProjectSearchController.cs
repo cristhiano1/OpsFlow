@@ -1,6 +1,8 @@
 using System.Text;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using OpsFlow.Api.RateLimiting;
 using OpsFlow.Application.Authorization;
 using OpsFlow.Application.Documents;
 using OpsFlow.Contracts.Documents;
@@ -11,6 +13,7 @@ namespace OpsFlow.Api.Projects;
 [ApiController]
 [Route("api/v1/projects/{projectId:guid}/search")]
 [Authorize]
+[EnableRateLimiting(RateLimitPolicies.RagExpensive)]
 public sealed class ProjectSearchController : ControllerBase
 {
     private const int DefaultTopK = 10;
