@@ -10,9 +10,14 @@ internal sealed class OpsFlowWebApplicationFactory : WebApplicationFactory<Progr
     private const string ConnectionStringEnvironmentVariable = "ConnectionStrings__OpsFlow";
 
     private readonly string? _previousConnectionString;
+    private readonly Dictionary<string, string?>? _additionalConfig;
 
-    public OpsFlowWebApplicationFactory(string connectionString)
+    public OpsFlowWebApplicationFactory(
+        string connectionString,
+        Dictionary<string, string?>? additionalConfig = null)
     {
+        _additionalConfig = additionalConfig;
+
         _previousConnectionString = Environment.GetEnvironmentVariable(
             ConnectionStringEnvironmentVariable,
             EnvironmentVariableTarget.Process);
@@ -27,12 +32,27 @@ internal sealed class OpsFlowWebApplicationFactory : WebApplicationFactory<Progr
     {
         builder.UseEnvironment("Testing");
 
-        builder.ConfigureAppConfiguration((_, config) =>
+        var config = new Dictionary<string, string?>
         {
-            config.AddInMemoryCollection(new Dictionary<string, string?>
+            ["Jwt:SigningKey"] = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)),
+            ["RateLimiting:Auth:PermitLimit"] = "10000",
+            ["RateLimiting:Api:PermitLimit"] = "10000",
+            ["RateLimiting:Rag:PermitLimit"] = "10000",
+            ["RateLimiting:Upload:PermitLimit"] = "10000",
+            ["Cors:AllowedOrigins:0"] = "http://localhost:5173",
+        };
+
+        if (_additionalConfig is not null)
+        {
+            foreach (var (key, value) in _additionalConfig)
             {
-                ["Jwt:SigningKey"] = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)),
-            });
+                config[key] = value;
+            }
+        }
+
+        builder.ConfigureAppConfiguration((_, configBuilder) =>
+        {
+            configBuilder.AddInMemoryCollection(config);
         });
     }
 

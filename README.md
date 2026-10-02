@@ -37,7 +37,6 @@ upload workflows.
 
 - RAG question-answering UI (backend API exists; no frontend page yet)
 - Application Dockerfiles and container orchestration
-- Health check endpoints
 - Telemetry export (metrics instruments exist but no exporter is configured)
 - Production deployment infrastructure
 
@@ -83,6 +82,16 @@ for authentication concurrency control.
   named authorization policies; Viewer is read-only, Technician can contribute
   documents but not manage projects, unauthenticated requests receive 401 and
   insufficient roles receive 403
+- **Health checks** — `GET /health/live` (liveness, no dependencies) and
+  `GET /health/ready` (readiness, includes SQL Server connectivity);
+  anonymous, no sensitive data exposed
+- **CORS** — explicit origin allowlist via configuration; no wildcard
+  production origins; credentialed requests are allowed only for trusted origins
+  so the HttpOnly refresh-cookie flow works for same-site cross-origin deployments
+- **Rate limiting** — four named policies (AuthStrict, ApiStandard,
+  RagExpensive, Upload) protect abuse-sensitive and resource-intensive
+  endpoints; exceeded requests receive `429 Too Many Requests` with
+  `Retry-After`; all limits are configurable
 
 ### Authentication
 
@@ -194,9 +203,11 @@ A retrieval evaluation framework supports offline quality measurement:
 | `api/v1/projects/{id}/documents/{id}/extraction` | GET | Get extraction |
 | `api/v1/projects/{id}/search` | POST | Hybrid chunk search |
 | `api/v1/projects/{id}/answer` | POST | RAG question answering |
+| `/health/live` | GET | Liveness probe (anonymous) |
+| `/health/ready` | GET | Readiness probe (anonymous) |
 
 All endpoints except the three auth endpoints (`login`, `refresh`, `logout`)
-require JWT Bearer authentication.
+and the two health endpoints require JWT Bearer authentication.
 
 ## Repository structure
 
@@ -204,7 +215,7 @@ require JWT Bearer authentication.
 OpsFlow/
 ├── .github/workflows/ci.yml              # CI pipeline (backend + frontend)
 ├── docs/
-│   └── architecture/decisions/            # 12 ADRs (ADR-001 through ADR-012)
+│   └── architecture/decisions/            # 14 ADRs (ADR-001 through ADR-014)
 ├── src/
 │   ├── backend/
 │   │   ├── OpsFlow.Api/                   # ASP.NET Core host, 5 controllers
@@ -314,17 +325,17 @@ secrets or environment variables — never committed):
 
 ## Testing
 
-**1,307 tests** across six projects:
+**1,323 tests** across six projects:
 
 | Project | Tests | Scope |
 |---|---|---|
 | `OpsFlow.Domain.UnitTests` | 70 | Entity invariants and validation |
 | `OpsFlow.Application.UnitTests` | 555 | Service orchestration, RAG paths, telemetry |
 | `OpsFlow.Infrastructure.UnitTests` | 224 | Repositories, adapters, EF Core mappings |
-| `OpsFlow.Api.IntegrationTests` | 392 | Full HTTP pipeline with Testcontainers SQL Server |
+| `OpsFlow.Api.IntegrationTests` | 408 | Full HTTP pipeline with Testcontainers SQL Server |
 | `OpsFlow.Evaluation.UnitTests` | 66 | Retrieval metrics (MRR, NDCG, Recall) |
 
-**CI results (after PR #34):** 1,306 passed, 1 skipped.
+**CI results:** 1,322 passed, 1 skipped (after PR #35).
 
 The single skipped test
 (`RealBedrockRerankedEvaluationTests`) requires live AWS credentials and a SQL
@@ -350,7 +361,7 @@ commit is pushed to the same branch.
 ## Architecture decisions
 
 Major technical decisions are documented as Architecture Decision Records in
-[`docs/architecture/decisions/`](docs/architecture/decisions/). Current ADRs:
+[`docs/architecture/decisions/`](docs/architecture/decisions/):
 
 | ADR | Topic |
 |---|---|
@@ -366,6 +377,8 @@ Major technical decisions are documented as Architecture Decision Records in
 | [ADR-010](docs/architecture/decisions/ADR-010-production-reranker-adapter.md) | Production reranker adapter |
 | [ADR-011](docs/architecture/decisions/ADR-011-grounded-rag-reranking-activation.md) | Grounded RAG reranking activation |
 | [ADR-012](docs/architecture/decisions/ADR-012-grounded-rag-observability.md) | Grounded RAG observability |
+| [ADR-013](docs/architecture/decisions/ADR-013-endpoint-role-authorization.md) | Endpoint role authorization |
+| [ADR-014](docs/architecture/decisions/ADR-014-api-production-hardening.md) | API production hardening |
 
 ## Current limitations
 
@@ -375,20 +388,23 @@ The following are known gaps, documented here for transparency:
   not yet have a page for asking questions or viewing grounded answers
 - **No application Dockerfiles** — Docker is used only for the SQL Server
   development container; the backend and frontend have no container images
-- **No health check endpoints** — the API does not expose `/health` or
-  `/ready` endpoints
 - **No telemetry export** — metrics instruments are in place but no
   OpenTelemetry exporter or dashboard is configured
 - **No distributed tracing**
-- **No CORS configuration** — frontend-backend integration currently works
-  through the Vite development proxy
-- **No rate limiting**
 - **No fine-grained permissions** — authorization uses four fixed roles with
   two coarse policies; there is no dynamic permission management UI or
   per-resource access control
 - **No background document processing** — text extraction, chunking, and
   embedding generation are synchronous per-request operations
 - **No pagination** on list endpoints
+- **No distributed rate limiting** — rate limits are per-process; multi-instance
+  deployments would need Redis-backed distributed limiting
+- **No proxy-aware IP detection** — rate-limit IP partitioning uses
+  `RemoteIpAddress` directly; behind a reverse proxy, forwarded-header
+  middleware must be configured separately
+- **Cross-site refresh remains unsupported** — CORS allows credentials for trusted
+  origins, but the refresh cookie remains `SameSite=Strict`; deployments on a
+  different site require a separate CSRF-safe cookie/session design
 
 ## What this project demonstrates
 
@@ -402,13 +418,13 @@ The following are known gaps, documented here for transparency:
 - **RAG pipeline engineering** — hybrid retrieval (vector + lexical + RRF),
   optional reranking with fail-open/fail-closed semantics, grounded answer
   generation with citation validation
-- **Testing discipline** — 1,307 tests across unit, integration, and
+- **Testing discipline** — 1,323 tests across unit, integration, and
   evaluation layers; Testcontainers for database-realistic integration tests
 - **Continuous integration** — automated build, lint, and test gates on every
   change
 - **Observability foundations** — privacy-safe metrics instrumentation ready
   for any OpenTelemetry-compatible backend
-- **Decision documentation** — 12 ADRs recording the rationale behind every
+- **Decision documentation** — 14 ADRs recording the rationale behind every
   major technical choice
 
 ## License
