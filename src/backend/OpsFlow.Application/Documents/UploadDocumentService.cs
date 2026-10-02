@@ -89,7 +89,7 @@ public sealed class UploadDocumentService
         if (!AllowedExtensions.TryGetValue(extension, out var canonicalMime))
         {
             return UploadDocumentResult.ValidationError(
-                $"Unsupported file type '{extension}'. Allowed: .pdf, .txt, .docx");
+                $"Unsupported file type '{extension}'. Allowed: .txt, .docx");
         }
 
         if (command.SizeBytes <= 0)
