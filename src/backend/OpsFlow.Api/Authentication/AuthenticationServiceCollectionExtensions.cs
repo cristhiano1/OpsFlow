@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using OpsFlow.Application.Authorization;
 using OpsFlow.Infrastructure.Authentication;
 
 namespace OpsFlow.Api.Authentication;
@@ -27,7 +28,21 @@ public static class AuthenticationServiceCollectionExtensions
                 bearer.TokenValidationParameters = parametersFactory.Create();
             });
 
-        services.AddAuthorization();
+        services.AddAuthorization(options =>
+        {
+            options.AddPolicy(
+                AuthorizationPolicies.ProjectManage,
+                policy => policy.RequireRole(
+                    OpsFlowRoles.OrganizationAdministrator,
+                    OpsFlowRoles.Coordinator));
+
+            options.AddPolicy(
+                AuthorizationPolicies.DocumentContribute,
+                policy => policy.RequireRole(
+                    OpsFlowRoles.OrganizationAdministrator,
+                    OpsFlowRoles.Coordinator,
+                    OpsFlowRoles.Technician));
+        });
 
         return services;
     }

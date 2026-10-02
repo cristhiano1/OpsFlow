@@ -35,8 +35,6 @@ upload workflows.
 
 **Major pieces not yet implemented:**
 
-- Endpoint-level role enforcement (roles are modeled/seeded/in JWTs but
-  not checked at the endpoint level)
 - RAG question-answering UI (backend API exists; no frontend page yet)
 - Application Dockerfiles and container orchestration
 - Health check endpoints
@@ -80,10 +78,11 @@ for authentication concurrency control.
 
 - **Multi-tenancy** — every user belongs to an organization; all queries are
   scoped to the user's organization
-- **Role modeling** — four roles are defined and seeded (OrganizationAdministrator,
-  Coordinator, Technician, Viewer) and included in JWT claims, but endpoint-level
-  role enforcement is not yet implemented; all protected endpoints currently use
-  bare `[Authorize]` (authentication required, no role check)
+- **Role-based authorization** — four roles (Organization Administrator,
+  Coordinator, Technician, Viewer) are enforced at the endpoint level via
+  named authorization policies; Viewer is read-only, Technician can contribute
+  documents but not manage projects, unauthenticated requests receive 401 and
+  insufficient roles receive 403
 
 ### Authentication
 
@@ -315,17 +314,17 @@ secrets or environment variables — never committed):
 
 ## Testing
 
-**1,267 tests** across six projects:
+**1,307 tests** across six projects:
 
 | Project | Tests | Scope |
 |---|---|---|
 | `OpsFlow.Domain.UnitTests` | 70 | Entity invariants and validation |
 | `OpsFlow.Application.UnitTests` | 555 | Service orchestration, RAG paths, telemetry |
 | `OpsFlow.Infrastructure.UnitTests` | 224 | Repositories, adapters, EF Core mappings |
-| `OpsFlow.Api.IntegrationTests` | 352 | Full HTTP pipeline with Testcontainers SQL Server |
+| `OpsFlow.Api.IntegrationTests` | 392 | Full HTTP pipeline with Testcontainers SQL Server |
 | `OpsFlow.Evaluation.UnitTests` | 66 | Retrieval metrics (MRR, NDCG, Recall) |
 
-**CI results (after PR #33):** 1,266 passed, 1 skipped.
+**CI results (after PR #34):** 1,306 passed, 1 skipped.
 
 The single skipped test
 (`RealBedrockRerankedEvaluationTests`) requires live AWS credentials and a SQL
@@ -384,9 +383,9 @@ The following are known gaps, documented here for transparency:
 - **No CORS configuration** — frontend-backend integration currently works
   through the Vite development proxy
 - **No rate limiting**
-- **No endpoint-level role enforcement** — roles are defined, seeded, and
-  carried in JWTs, but all protected endpoints use bare `[Authorize]` with no
-  role or policy checks
+- **No fine-grained permissions** — authorization uses four fixed roles with
+  two coarse policies; there is no dynamic permission management UI or
+  per-resource access control
 - **No background document processing** — text extraction, chunking, and
   embedding generation are synchronous per-request operations
 - **No pagination** on list endpoints
@@ -396,14 +395,14 @@ The following are known gaps, documented here for transparency:
 - **Backend architecture** — Clean Architecture with strict layer separation,
   dependency inversion via port interfaces, and centralized package management
 - **Security** — JWT authentication with refresh-token rotation, family-based
-  revocation, reuse detection, and timing-attack mitigation; roles are modeled
-  and seeded (endpoint-level role enforcement is planned)
+  revocation, reuse detection, and timing-attack mitigation; endpoint-level
+  role-based authorization enforced via named policies
 - **Multi-tenancy** — organization-scoped data isolation enforced at the
   query level
 - **RAG pipeline engineering** — hybrid retrieval (vector + lexical + RRF),
   optional reranking with fail-open/fail-closed semantics, grounded answer
   generation with citation validation
-- **Testing discipline** — 1,267 tests across unit, integration, and
+- **Testing discipline** — 1,307 tests across unit, integration, and
   evaluation layers; Testcontainers for database-realistic integration tests
 - **Continuous integration** — automated build, lint, and test gates on every
   change

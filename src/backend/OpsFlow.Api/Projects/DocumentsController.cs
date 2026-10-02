@@ -53,6 +53,7 @@ public sealed class DocumentsController : ControllerBase
     /// </summary>
     [HttpPost]
     [RequestSizeLimit(26 * 1024 * 1024)]
+    [Authorize(Policy = AuthorizationPolicies.DocumentContribute)]
     public async Task<IActionResult> UploadAsync(
         Guid projectId,
         [FromForm] IFormFile? file,
@@ -219,6 +220,7 @@ public sealed class DocumentsController : ControllerBase
     /// persists the result.
     /// </summary>
     [HttpPost("{documentId:guid}/extraction")]
+    [Authorize(Policy = AuthorizationPolicies.DocumentContribute)]
     public async Task<IActionResult> ExtractTextAsync(
         Guid projectId,
         Guid documentId,
