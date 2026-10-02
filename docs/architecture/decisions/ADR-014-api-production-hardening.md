@@ -43,14 +43,16 @@ default includes `http://localhost:5173` (the Vite dev server).
 | Origins | Configuration-driven allowlist | No `AllowAnyOrigin`; secure default when unconfigured |
 | Methods | GET, POST | Only methods the current API uses |
 | Headers | Content-Type, Authorization | Authorization needed for JWT bearer tokens |
-| Credentials | Not allowed | Access tokens use the Authorization header, not cookies; the refresh cookie uses `SameSite=Strict` and does not work cross-origin |
+| Credentials | Allowed for trusted origins | Login, refresh, and logout use an HttpOnly refresh cookie and the frontend sends `credentials: 'include'`; explicit origins are required (never `*`) |
 
 If no origins are configured, the CORS policy allows nothing — a secure
 default for production environments that haven't completed CORS setup.
 
-**Limitation:** cross-origin token refresh requires changing the refresh
-cookie's `SameSite` policy from `Strict` to `None`, which is outside the
-scope of this change.
+**Limitation:** the refresh cookie remains `SameSite=Strict`. Credentialed CORS
+therefore supports same-site cross-origin deployments (for example sibling
+subdomains or different ports where the browser considers the sites the same),
+but not a frontend hosted on a different site. Supporting cross-site refresh
+would require a separate CSRF-safe cookie/session design.
 
 ### Rate limiting
 
@@ -109,8 +111,9 @@ user ID rather than IP.
 - **Sliding window or token bucket:** Rejected in favor of fixed window
   for simplicity; the current endpoint mix does not need burst
   allowance.
-- **AllowCredentials in CORS:** Rejected because access tokens are in
-  the Authorization header and the refresh cookie is `SameSite=Strict`.
+- **Omitting CORS credentials:** Rejected because login, refresh, and logout
+  use an HttpOnly refresh cookie and the frontend sends `credentials: 'include'`.
+  Credentials are enabled only for explicitly allowlisted origins.
 
 ## Consequences
 
