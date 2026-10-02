@@ -315,17 +315,17 @@ secrets or environment variables — never committed):
 
 ## Testing
 
-**1,272 tests** across six projects:
+**1,267 tests** across six projects:
 
 | Project | Tests | Scope |
 |---|---|---|
 | `OpsFlow.Domain.UnitTests` | 70 | Entity invariants and validation |
-| `OpsFlow.Application.UnitTests` | 556 | Service orchestration, RAG paths, telemetry |
+| `OpsFlow.Application.UnitTests` | 555 | Service orchestration, RAG paths, telemetry |
 | `OpsFlow.Infrastructure.UnitTests` | 224 | Repositories, adapters, EF Core mappings |
-| `OpsFlow.Api.IntegrationTests` | 356 | Full HTTP pipeline with Testcontainers SQL Server |
+| `OpsFlow.Api.IntegrationTests` | 352 | Full HTTP pipeline with Testcontainers SQL Server |
 | `OpsFlow.Evaluation.UnitTests` | 66 | Retrieval metrics (MRR, NDCG, Recall) |
 
-**CI results (after PR #32):** 1,271 passed, 1 skipped.
+**CI results (after PR #33):** 1,266 passed, 1 skipped.
 
 The single skipped test
 (`RealBedrockRerankedEvaluationTests`) requires live AWS credentials and a SQL
@@ -403,7 +403,7 @@ The following are known gaps, documented here for transparency:
 - **RAG pipeline engineering** — hybrid retrieval (vector + lexical + RRF),
   optional reranking with fail-open/fail-closed semantics, grounded answer
   generation with citation validation
-- **Testing discipline** — 1,272 tests across unit, integration, and
+- **Testing discipline** — 1,267 tests across unit, integration, and
   evaluation layers; Testcontainers for database-realistic integration tests
 - **Continuous integration** — automated build, lint, and test gates on every
   change
