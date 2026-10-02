@@ -3,6 +3,9 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -216,6 +219,20 @@ public sealed class DocumentContentEndpointTests : IDisposable
         return msg;
     }
 
+    private static byte[] CreateMinimalDocx(string text = "test")
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(
+                new Body(new Paragraph(new Run(new Text(text)))));
+            mainPart.Document.Save();
+        }
+
+        return ms.ToArray();
+    }
+
     // ================================================================
     // Unauthenticated
     // ================================================================
@@ -264,7 +281,7 @@ public sealed class DocumentContentEndpointTests : IDisposable
     public async Task Valid_docx_download_returns_200_with_exact_bytes()
     {
         var (token, _, projectId) = await SeedProjectAndLoginAsync();
-        var data = new byte[] { 0x50, 0x4B, 0x03, 0x04 };
+        var data = CreateMinimalDocx("contract content");
         var docxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
         var (docId, _) = await UploadDocumentAsync(token, projectId, "contract.docx", data, docxMime);
 
@@ -515,9 +532,8 @@ public sealed class DocumentContentEndpointTests : IDisposable
     public async Task Response_body_exactly_matches_stored_bytes()
     {
         var (token, _, projectId) = await SeedProjectAndLoginAsync();
-        var data = new byte[8192];
-        Random.Shared.NextBytes(data);
-        var (docId, _) = await UploadDocumentAsync(token, projectId, "random.txt", data);
+        var data = Encoding.UTF8.GetBytes(new string('A', 8192));
+        var (docId, _) = await UploadDocumentAsync(token, projectId, "bulk.txt", data);
 
         using var response = await _client.SendAsync(BuildContentRequest(token, projectId, docId));
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);

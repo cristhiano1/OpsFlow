@@ -3,6 +3,9 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -194,6 +197,20 @@ public sealed class DocumentUploadEndpointTests : IDisposable
         return msg;
     }
 
+    private static byte[] CreateMinimalDocx(string text = "test")
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(
+                new Body(new Paragraph(new Run(new Text(text)))));
+            mainPart.Document.Save();
+        }
+
+        return ms.ToArray();
+    }
+
     // ================================================================
     // Unauthenticated
     // ================================================================
@@ -254,7 +271,7 @@ public sealed class DocumentUploadEndpointTests : IDisposable
     public async Task Valid_docx_upload_returns_201()
     {
         var (token, _, projectId) = await SeedProjectAndLoginAsync();
-        var data = new byte[] { 0x50, 0x4B, 0x03, 0x04 };
+        var data = CreateMinimalDocx("contract content");
         var docxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
         using var response = await _client.SendAsync(
@@ -295,7 +312,7 @@ public sealed class DocumentUploadEndpointTests : IDisposable
     public async Task Upload_bytes_actually_appear_under_configured_test_storage()
     {
         var (token, orgId, projectId) = await SeedProjectAndLoginAsync();
-        var data = new byte[] { 0xCA, 0xFE, 0xBA, 0xBE };
+        var data = "storage-check"u8.ToArray();
 
         using var response = await _client.SendAsync(
             BuildUploadRequest(token, projectId, "check.txt", data));
