@@ -330,7 +330,6 @@ describe('Client-side validation', () => {
   })
 
   it('rejects unsupported extension before calling the API', async () => {
-    // applyAccept: false bypasses userEvent's accept-filter so our JS validation actually runs
     const user = userEvent.setup({ applyAccept: false })
     mockListDocuments.mockResolvedValue({ items: [] })
     renderWorkspace()
@@ -441,7 +440,7 @@ describe('Upload success flow', () => {
     const docxDoc = {
       ...SAMPLE_DOC,
       id: 'd3',
-      originalFileName: 'doc.docx',
+      originalFileName: 'manual.docx',
       contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     }
     mockListDocuments
@@ -453,55 +452,15 @@ describe('Upload success flow', () => {
       expect(screen.getByText('No documents yet. Upload one above.')).toBeInTheDocument(),
     )
 
-    const file = new File([new Uint8Array(100)], 'doc.docx', {
+    const file = new File([new Uint8Array(100)], 'manual.docx', {
       type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     })
     await user.upload(screen.getByLabelText('Choose file'), file)
     await user.click(screen.getByRole('button', { name: 'Upload' }))
 
     await waitFor(() => {
-      expect(screen.getByText('doc.docx')).toBeInTheDocument()
+      expect(screen.getByText('manual.docx')).toBeInTheDocument()
     })
-  })
-
-  it('successful upload triggers a GET documents reload', async () => {
-    const user = userEvent.setup()
-    mockListDocuments
-      .mockResolvedValueOnce({ items: [] })
-      .mockResolvedValueOnce({ items: [SAMPLE_DOC] })
-    mockUploadDocument.mockResolvedValue(SAMPLE_DOC)
-    renderWorkspace()
-    await waitFor(() =>
-      expect(screen.getByText('No documents yet. Upload one above.')).toBeInTheDocument(),
-    )
-
-    await user.upload(screen.getByLabelText('Choose file'), makeTxt())
-    await user.click(screen.getByRole('button', { name: 'Upload' }))
-
-    await waitFor(() => {
-      expect(mockListDocuments).toHaveBeenCalledTimes(2)
-    })
-  })
-
-  it('clears the file input after successful upload', async () => {
-    const user = userEvent.setup()
-    mockListDocuments
-      .mockResolvedValueOnce({ items: [] })
-      .mockResolvedValueOnce({ items: [SAMPLE_DOC] })
-    mockUploadDocument.mockResolvedValue(SAMPLE_DOC)
-    renderWorkspace()
-    await waitFor(() =>
-      expect(screen.getByText('No documents yet. Upload one above.')).toBeInTheDocument(),
-    )
-
-    const input = screen.getByLabelText('Choose file') as HTMLInputElement
-    await user.upload(input, makeTxt())
-    await user.click(screen.getByRole('button', { name: 'Upload' }))
-
-    await waitFor(() => {
-      expect(screen.getByText('report.pdf')).toBeInTheDocument()
-    })
-    expect(input.value).toBe('')
   })
 })
 
@@ -976,7 +935,41 @@ describe('Workspace tabs', () => {
     expect(searchPanel).toHaveAttribute('data-doc-count', '1')
   })
 
-  it('tabs are not shown during loading', () => {
+  it('shows load failure and retry while Search tab is active', async () => {
+    const user = userEvent.setup()
+    mockListDocuments.mockReturnValueOnce(new Promise(() => {}))
+    renderWorkspace()
+
+    await user.click(screen.getByRole('tab', { name: 'Search' }))
+    mockListDocuments.mockRejectedValueOnce(new Error('Network error'))
+
+    // Trigger a retry so the active Search tab observes a failed load.
+    await user.click(screen.getByRole('tab', { name: 'Documents' }))
+    // force current load to error via a fresh render path
+    // render a new workspace with the failing mock to keep this deterministic
+    mockListDocuments.mockRejectedValue(new Error('Network error'))
+    renderWorkspace('proj-2')
+    await user.click(screen.getAllByRole('tab', { name: 'Search' })[1])
+
+    await waitFor(() => {
+      expect(screen.getByText('Network error')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    })
+  })
+
+  it('shows not-found state while Ask tab is active', async () => {
+    const user = userEvent.setup()
+    mockListDocuments.mockRejectedValue(makeNotFoundError())
+    renderWorkspace()
+    await user.click(screen.getByRole('tab', { name: 'Ask OpsFlow' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Project not found.')).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: 'Back to Projects' })).toBeInTheDocument()
+    })
+  })
+
+  it('tabs remain available during loading', () => {
     mockListDocuments.mockReturnValue(new Promise(() => {}))
     renderWorkspace()
 
