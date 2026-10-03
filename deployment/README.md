@@ -125,8 +125,11 @@ docker compose -f docker-compose.yml -f docker-compose.production.yml config | g
 
 ## Demo accounts
 
-When `SEED_DEMO_DATA=true` (the default in the example env), the following
-accounts are created on first startup:
+`SEED_DEMO_DATA` defaults to `false`. For the intentional initial demo seed,
+set it to `true`, start the stack once, verify the accounts/data, then set it
+back to `false` for subsequent deployments.
+
+When `SEED_DEMO_DATA=true`, the following accounts are created idempotently:
 
 | Email | Role | Organization |
 |---|---|---|
