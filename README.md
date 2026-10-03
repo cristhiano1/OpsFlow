@@ -37,7 +37,6 @@ upload workflows.
 **Major pieces not yet implemented:**
 
 - Telemetry export (metrics instruments exist but no exporter is configured)
-- Production cloud deployment infrastructure
 
 ## Architecture
 
@@ -65,10 +64,12 @@ with automatic token refresh.
 
 ### Data — SQL Server 2025
 
-Microsoft SQL Server 2025 (Developer edition) running in Docker for local
-development. Provides native vector storage (`vector` type) for semantic
-search, Full-Text Search indexes for lexical retrieval, and application locks
-for authentication concurrency control.
+Microsoft SQL Server 2025 running in Docker. Local development uses Developer
+edition; the production demo uses Express edition (free, runtime-verified
+compatible — see [ADR-016](docs/architecture/decisions/ADR-016-production-demo-deployment.md)).
+Provides native vector storage (`vector` type) for semantic search, Full-Text
+Search indexes for lexical retrieval, and application locks for authentication
+concurrency control.
 
 ## Implemented capabilities
 
@@ -212,9 +213,16 @@ and the two health endpoints require JWT Bearer authentication.
 
 ```
 OpsFlow/
-├── .github/workflows/ci.yml              # CI pipeline (backend + frontend)
+├── .github/workflows/
+│   ├── ci.yml                            # CI pipeline (backend + frontend)
+│   └── deploy.yml                        # Manual deployment (workflow_dispatch)
+├── deployment/
+│   ├── Caddyfile                         # Caddy reverse proxy config
+│   ├── nginx-production.conf             # Production nginx (static files only)
+│   ├── .env.production.example           # Production env template
+│   └── README.md                         # Deployment guide
 ├── docs/
-│   └── architecture/decisions/            # 15 ADRs (ADR-001 through ADR-015)
+│   └── architecture/decisions/            # 16 ADRs (ADR-001 through ADR-016)
 ├── src/
 │   ├── backend/
 │   │   ├── OpsFlow.Api/                   # ASP.NET Core host, 5 controllers
@@ -235,6 +243,7 @@ OpsFlow/
 │   ├── nginx/default.conf                 # Nginx reverse proxy for frontend container
 │   └── sqlserver-fts/                     # Custom SQL Server image (Full-Text)
 ├── docker-compose.yml                     # Full container stack (sqlserver, api, web)
+├── docker-compose.production.yml          # Production overlay (Express, Caddy, networks)
 ├── Directory.Build.props                  # Shared C# build settings
 ├── Directory.Packages.props               # Central NuGet package versions
 ├── OpsFlow.sln
@@ -348,6 +357,36 @@ docker compose down          # keeps volumes
 docker compose down -v       # removes volumes (fresh start)
 ```
 
+## Production deployment
+
+OpsFlow includes production deployment infrastructure for a single-VPS demo
+instance. See [`deployment/README.md`](deployment/README.md) for the full
+setup guide.
+
+**Architecture:**
+
+```
+Internet → Caddy :443 (TLS) → API :8080     (/api/*, /health/*)
+                              → nginx :80    (frontend static files)
+           SQL Server Express :1433          (internal only)
+```
+
+**Key features:**
+- SQL Server 2025 Express edition (free for production use)
+- Automatic TLS via Caddy (Let's Encrypt)
+- Single-hop API proxy (Caddy → API directly)
+- Docker network isolation (database not internet-accessible)
+- Manual deployment gate (`workflow_dispatch`)
+- Idempotent demo data seeding
+
+**Quick start:**
+
+```bash
+cp deployment/.env.production.example .env
+# Edit .env with real values
+docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --build
+```
+
 ## Configuration
 
 The backend uses the following configuration sections (configured via user
@@ -420,6 +459,7 @@ Major technical decisions are documented as Architecture Decision Records in
 | [ADR-013](docs/architecture/decisions/ADR-013-endpoint-role-authorization.md) | Endpoint role authorization |
 | [ADR-014](docs/architecture/decisions/ADR-014-api-production-hardening.md) | API production hardening |
 | [ADR-015](docs/architecture/decisions/ADR-015-application-containerization.md) | Application containerization |
+| [ADR-016](docs/architecture/decisions/ADR-016-production-demo-deployment.md) | Production demo deployment |
 
 ## Current limitations
 
@@ -436,9 +476,6 @@ The following are known gaps, documented here for transparency:
 - **No pagination** on list endpoints
 - **No distributed rate limiting** — rate limits are per-process; multi-instance
   deployments would need Redis-backed distributed limiting
-- **No proxy-aware IP detection** — rate-limit IP partitioning uses
-  `RemoteIpAddress` directly; behind a reverse proxy, forwarded-header
-  middleware must be configured separately
 - **Cross-site refresh remains unsupported** — CORS allows credentials for trusted
   origins, but the refresh cookie remains `SameSite=Strict`; deployments on a
   different site require a separate CSRF-safe cookie/session design
@@ -463,7 +500,10 @@ The following are known gaps, documented here for transparency:
   for any OpenTelemetry-compatible backend
 - **Containerization** — multi-stage Docker images for backend and frontend
   with nginx reverse proxy, health checks, and dependency-ordered startup
-- **Decision documentation** — 15 ADRs recording the rationale behind every
+- **Production deployment** — Caddy reverse proxy with automatic TLS, Docker
+  network isolation, SQL Server Express licensing, ForwardedHeaders middleware,
+  and manual deployment gate via GitHub Actions
+- **Decision documentation** — 16 ADRs recording the rationale behind every
   major technical choice
 
 ## License

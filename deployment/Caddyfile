@@ -1,0 +1,30 @@
+{$OPSFLOW_DOMAIN} {
+	# API traffic goes directly to the .NET API container (no nginx hop).
+	# Upload timeout matches the backend's synchronous document ingestion.
+	handle /api/* {
+		reverse_proxy api:8080 {
+			transport http {
+				read_timeout 300s
+				write_timeout 300s
+			}
+		}
+	}
+
+	handle /health/* {
+		reverse_proxy api:8080
+	}
+
+	# Everything else goes to nginx for SPA static file serving.
+	handle {
+		reverse_proxy web:80
+	}
+
+	encode gzip zstd
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+}

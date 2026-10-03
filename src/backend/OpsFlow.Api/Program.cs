@@ -1,4 +1,7 @@
+using System.Globalization;
+using System.Net;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using OpsFlow.Api.Authentication;
@@ -90,15 +93,34 @@ builder.Services.AddScoped(serviceProvider =>
         serviceProvider.GetRequiredService<IGroundedAnswerTelemetry>());
 });
 
+if (!builder.Environment.IsDevelopment())
+{
+    builder.Services.Configure<ForwardedHeadersOptions>(options =>
+    {
+        options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+        options.ForwardLimit = 1;
+        options.KnownIPNetworks.Clear();
+        options.KnownProxies.Clear();
+        var caddyNetwork = builder.Configuration["ForwardedHeaders:TrustedNetwork"];
+        if (!string.IsNullOrWhiteSpace(caddyNetwork))
+        {
+            var parts = caddyNetwork.Split('/');
+            options.KnownIPNetworks.Add(new System.Net.IPNetwork(
+                IPAddress.Parse(parts[0]),
+                int.Parse(parts[1], CultureInfo.InvariantCulture)));
+        }
+    });
+}
+
 var app = builder.Build();
 
 await ApplyMigrationsIfRequestedAsync(app);
 await ApplyDevelopmentDataAsync(app);
+await ApplyDemoDataIfRequestedAsync(app);
 
-// HTTPS redirection is enforced only outside Development; local development is
-// served over HTTP behind the Vite dev proxy (see docs/architecture).
 if (!app.Environment.IsDevelopment())
 {
+    app.UseForwardedHeaders();
     app.UseExceptionHandler(exceptionApp =>
     {
         exceptionApp.Run(context =>
@@ -167,6 +189,24 @@ static async Task ApplyDevelopmentDataAsync(WebApplication app)
 
     var seeder = scope.ServiceProvider.GetRequiredService<DevelopmentDataSeeder>();
     await seeder.SeedAsync();
+}
+
+// Seeds demo data in Production when SEED_DEMO_DATA=true. This is a separate
+// path from development seeding: it reuses the same DevelopmentDataSeeder (which
+// is idempotent) but is gated on an explicit environment variable so it never
+// runs unless deliberately enabled for a public demo instance.
+static async Task ApplyDemoDataIfRequestedAsync(WebApplication app)
+{
+    var shouldSeed = app.Configuration.GetValue<bool>("SEED_DEMO_DATA");
+    if (!shouldSeed)
+    {
+        return;
+    }
+
+    using var scope = app.Services.CreateScope();
+    var seeder = scope.ServiceProvider.GetRequiredService<DevelopmentDataSeeder>();
+    await seeder.SeedAsync();
+    app.Logger.LogInformation("Demo data seeded (SEED_DEMO_DATA=true)");
 }
 
 /// <summary>Program entry point marker, exposed for integration testing.</summary>
