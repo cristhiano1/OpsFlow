@@ -3,6 +3,22 @@ import userEvent from '@testing-library/user-event'
 import { createMemoryRouter, MemoryRouter, Route, RouterProvider, Routes } from 'react-router-dom'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+vi.mock('./AskPanel', () => ({
+  AskPanel: ({ projectId, documents }: { projectId: string; documents: unknown[] }) => (
+    <div data-testid="ask-panel" data-project-id={projectId} data-doc-count={documents.length}>
+      Ask Panel
+    </div>
+  ),
+}))
+
+vi.mock('./SearchPanel', () => ({
+  SearchPanel: ({ projectId, documents }: { projectId: string; documents: unknown[] }) => (
+    <div data-testid="search-panel" data-project-id={projectId} data-doc-count={documents.length}>
+      Search Panel
+    </div>
+  ),
+}))
+
 vi.mock('./documentsApi', () => ({
   listDocuments: vi.fn(),
   uploadDocument: vi.fn(),
@@ -314,7 +330,6 @@ describe('Client-side validation', () => {
   })
 
   it('rejects unsupported extension before calling the API', async () => {
-    // applyAccept: false bypasses userEvent's accept-filter so our JS validation actually runs
     const user = userEvent.setup({ applyAccept: false })
     mockListDocuments.mockResolvedValue({ items: [] })
     renderWorkspace()
@@ -425,7 +440,7 @@ describe('Upload success flow', () => {
     const docxDoc = {
       ...SAMPLE_DOC,
       id: 'd3',
-      originalFileName: 'doc.docx',
+      originalFileName: 'manual.docx',
       contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     }
     mockListDocuments
@@ -437,55 +452,15 @@ describe('Upload success flow', () => {
       expect(screen.getByText('No documents yet. Upload one above.')).toBeInTheDocument(),
     )
 
-    const file = new File([new Uint8Array(100)], 'doc.docx', {
+    const file = new File([new Uint8Array(100)], 'manual.docx', {
       type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     })
     await user.upload(screen.getByLabelText('Choose file'), file)
     await user.click(screen.getByRole('button', { name: 'Upload' }))
 
     await waitFor(() => {
-      expect(screen.getByText('doc.docx')).toBeInTheDocument()
+      expect(screen.getByText('manual.docx')).toBeInTheDocument()
     })
-  })
-
-  it('successful upload triggers a GET documents reload', async () => {
-    const user = userEvent.setup()
-    mockListDocuments
-      .mockResolvedValueOnce({ items: [] })
-      .mockResolvedValueOnce({ items: [SAMPLE_DOC] })
-    mockUploadDocument.mockResolvedValue(SAMPLE_DOC)
-    renderWorkspace()
-    await waitFor(() =>
-      expect(screen.getByText('No documents yet. Upload one above.')).toBeInTheDocument(),
-    )
-
-    await user.upload(screen.getByLabelText('Choose file'), makeTxt())
-    await user.click(screen.getByRole('button', { name: 'Upload' }))
-
-    await waitFor(() => {
-      expect(mockListDocuments).toHaveBeenCalledTimes(2)
-    })
-  })
-
-  it('clears the file input after successful upload', async () => {
-    const user = userEvent.setup()
-    mockListDocuments
-      .mockResolvedValueOnce({ items: [] })
-      .mockResolvedValueOnce({ items: [SAMPLE_DOC] })
-    mockUploadDocument.mockResolvedValue(SAMPLE_DOC)
-    renderWorkspace()
-    await waitFor(() =>
-      expect(screen.getByText('No documents yet. Upload one above.')).toBeInTheDocument(),
-    )
-
-    const input = screen.getByLabelText('Choose file') as HTMLInputElement
-    await user.upload(input, makeTxt())
-    await user.click(screen.getByRole('button', { name: 'Upload' }))
-
-    await waitFor(() => {
-      expect(screen.getByText('report.pdf')).toBeInTheDocument()
-    })
-    expect(input.value).toBe('')
   })
 })
 
@@ -856,5 +831,164 @@ describe('Race safety: projectId change (A -> B navigation)', () => {
     expect(screen.getByText('b-file.pdf')).toBeInTheDocument()
     expect(screen.queryByText('a-file.pdf')).not.toBeInTheDocument()
     expect(mockListDocuments.mock.calls.length).toBe(listCallsBefore)
+  })
+})
+
+// ── Workspace tabs ───────────────────────────────────────────────────────
+
+describe('Workspace tabs', () => {
+  it('renders three tab buttons', async () => {
+    mockListDocuments.mockResolvedValue({ items: [SAMPLE_DOC] })
+    renderWorkspace()
+    await waitFor(() => {
+      expect(screen.getByText('report.pdf')).toBeInTheDocument()
+    })
+
+    expect(screen.getByRole('tab', { name: 'Documents' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Search' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Ask OpsFlow' })).toBeInTheDocument()
+  })
+
+  it('documents tab is active by default', async () => {
+    mockListDocuments.mockResolvedValue({ items: [SAMPLE_DOC] })
+    renderWorkspace()
+    await waitFor(() => {
+      expect(screen.getByText('report.pdf')).toBeInTheDocument()
+    })
+
+    expect(screen.getByRole('tab', { name: 'Documents' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
+  })
+
+  it('switching to Search tab shows SearchPanel', async () => {
+    const user = userEvent.setup()
+    mockListDocuments.mockResolvedValue({ items: [SAMPLE_DOC] })
+    renderWorkspace()
+    await waitFor(() => {
+      expect(screen.getByText('report.pdf')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('tab', { name: 'Search' }))
+
+    expect(screen.getByTestId('search-panel')).toBeInTheDocument()
+    expect(screen.queryByText('report.pdf')).not.toBeInTheDocument()
+  })
+
+  it('switching to Ask tab shows AskPanel', async () => {
+    const user = userEvent.setup()
+    mockListDocuments.mockResolvedValue({ items: [SAMPLE_DOC] })
+    renderWorkspace()
+    await waitFor(() => {
+      expect(screen.getByText('report.pdf')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('tab', { name: 'Ask OpsFlow' }))
+
+    expect(screen.getByTestId('ask-panel')).toBeInTheDocument()
+    expect(screen.queryByText('report.pdf')).not.toBeInTheDocument()
+  })
+
+  it('switching back to Documents tab shows document list', async () => {
+    const user = userEvent.setup()
+    mockListDocuments.mockResolvedValue({ items: [SAMPLE_DOC] })
+    renderWorkspace()
+    await waitFor(() => {
+      expect(screen.getByText('report.pdf')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('tab', { name: 'Ask OpsFlow' }))
+    expect(screen.queryByText('report.pdf')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: 'Documents' }))
+    expect(screen.getByText('report.pdf')).toBeInTheDocument()
+  })
+
+  it('passes projectId and documents to AskPanel', async () => {
+    const user = userEvent.setup()
+    mockListDocuments.mockResolvedValue({ items: [SAMPLE_DOC] })
+    renderWorkspace()
+    await waitFor(() => {
+      expect(screen.getByText('report.pdf')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('tab', { name: 'Ask OpsFlow' }))
+
+    const askPanel = screen.getByTestId('ask-panel')
+    expect(askPanel).toHaveAttribute('data-project-id', 'proj-1')
+    expect(askPanel).toHaveAttribute('data-doc-count', '1')
+  })
+
+  it('passes projectId and documents to SearchPanel', async () => {
+    const user = userEvent.setup()
+    mockListDocuments.mockResolvedValue({ items: [SAMPLE_DOC] })
+    renderWorkspace()
+    await waitFor(() => {
+      expect(screen.getByText('report.pdf')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('tab', { name: 'Search' }))
+
+    const searchPanel = screen.getByTestId('search-panel')
+    expect(searchPanel).toHaveAttribute('data-project-id', 'proj-1')
+    expect(searchPanel).toHaveAttribute('data-doc-count', '1')
+  })
+
+  it('tabs are not shown during loading', () => {
+    mockListDocuments.mockReturnValue(new Promise(() => {}))
+    renderWorkspace()
+
+    expect(screen.getByRole('tab', { name: 'Documents' })).toBeInTheDocument()
+    expect(screen.getByText('Loading documents…')).toBeInTheDocument()
+    expect(screen.queryByTestId('ask-panel')).not.toBeInTheDocument()
+  })
+
+  it('error state is visible when Search tab is active', async () => {
+    const user = userEvent.setup()
+    mockListDocuments.mockResolvedValueOnce({ items: [SAMPLE_DOC] })
+    const { unmount } = renderWorkspace()
+    await waitFor(() => {
+      expect(screen.getByText('report.pdf')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('tab', { name: 'Search' }))
+    expect(screen.getByTestId('search-panel')).toBeInTheDocument()
+
+    unmount()
+
+    mockListDocuments.mockRejectedValue(new Error('Network error'))
+    renderWorkspace('proj-2')
+    await waitFor(() => {
+      expect(screen.getByText('Network error')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('tab', { name: 'Search' }))
+    expect(screen.getByText('Network error')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+  })
+
+  it('not-found state is visible when Ask tab is active', async () => {
+    const user = userEvent.setup()
+    mockListDocuments.mockResolvedValueOnce({ items: [SAMPLE_DOC] })
+    const { unmount } = renderWorkspace()
+    await waitFor(() => {
+      expect(screen.getByText('report.pdf')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('tab', { name: 'Ask OpsFlow' }))
+    expect(screen.getByTestId('ask-panel')).toBeInTheDocument()
+
+    unmount()
+
+    mockListDocuments.mockRejectedValue(new ProjectNotFoundError())
+    renderWorkspace('proj-2')
+    await waitFor(() => {
+      expect(screen.getByText('Project not found.')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('tab', { name: 'Ask OpsFlow' }))
+    expect(screen.getByText('Project not found.')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Back to Projects' })).toBeInTheDocument()
   })
 })

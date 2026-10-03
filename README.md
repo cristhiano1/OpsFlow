@@ -30,12 +30,12 @@ upload workflows.
 - Grounded answer generation with structured citations and validation
 - RAG pipeline observability via BCL `System.Diagnostics.Metrics`
 - RAG retrieval evaluation framework (MRR@K, NDCG@K, Recall@K)
-- React frontend with login, token refresh, project creation, document workspace
+- React frontend with login, token refresh, project creation, document workspace,
+  grounded RAG question-answering with citations, and hybrid document search
 - CI pipeline with backend and frontend gates on every push and PR
 
 **Major pieces not yet implemented:**
 
-- RAG question-answering UI (backend API exists; no frontend page yet)
 - Telemetry export (metrics instruments exist but no exporter is configured)
 - Production cloud deployment infrastructure
 
@@ -183,7 +183,7 @@ A retrieval evaluation framework supports offline quality measurement:
 | Project creation and listing | Implemented |
 | Document upload and listing | Implemented |
 | Application shell with sidebar navigation | Implemented |
-| RAG question-answering UI | **Not yet implemented** |
+| RAG question-answering UI | Implemented |
 
 ### API endpoints
 
@@ -425,8 +425,6 @@ Major technical decisions are documented as Architecture Decision Records in
 
 The following are known gaps, documented here for transparency:
 
-- **No RAG answering UI** — the backend API is complete but the frontend does
-  not yet have a page for asking questions or viewing grounded answers
 - **No telemetry export** — metrics instruments are in place but no
   OpenTelemetry exporter or dashboard is configured
 - **No distributed tracing**

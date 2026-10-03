@@ -99,7 +99,7 @@ describe('App routing', () => {
       ['/projects/proj-123'],
     )
     expect(
-      screen.getByRole('heading', { name: 'Documents' }),
+      screen.getByRole('tab', { name: 'Documents' }),
     ).toBeInTheDocument()
     expect(
       screen.getByRole('navigation', { name: 'Primary navigation' }),
