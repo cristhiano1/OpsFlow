@@ -25,11 +25,38 @@
   text-decoration: underline;
 }
 
-.workspace-heading {
-  font-size: 1.25rem;
-  font-weight: 600;
-  margin: 0 0 1.5rem;
+/* Tab bar */
+.workspace-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1.5rem;
+}
+
+.workspace-tab {
+  padding: 0.625rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  margin-bottom: -1px;
+}
+
+.workspace-tab:hover {
   color: var(--text);
+}
+
+.workspace-tab-active {
+  color: var(--text);
+  border-bottom-color: var(--text);
+}
+
+.workspace-tab:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: -2px;
 }
 
 /* Upload form */

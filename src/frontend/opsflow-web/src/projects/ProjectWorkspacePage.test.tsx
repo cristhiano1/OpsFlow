@@ -3,6 +3,22 @@ import userEvent from '@testing-library/user-event'
 import { createMemoryRouter, MemoryRouter, Route, RouterProvider, Routes } from 'react-router-dom'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+vi.mock('./AskPanel', () => ({
+  AskPanel: ({ projectId, documents }: { projectId: string; documents: unknown[] }) => (
+    <div data-testid="ask-panel" data-project-id={projectId} data-doc-count={documents.length}>
+      Ask Panel
+    </div>
+  ),
+}))
+
+vi.mock('./SearchPanel', () => ({
+  SearchPanel: ({ projectId, documents }: { projectId: string; documents: unknown[] }) => (
+    <div data-testid="search-panel" data-project-id={projectId} data-doc-count={documents.length}>
+      Search Panel
+    </div>
+  ),
+}))
+
 vi.mock('./documentsApi', () => ({
   listDocuments: vi.fn(),
   uploadDocument: vi.fn(),
@@ -856,5 +872,116 @@ describe('Race safety: projectId change (A -> B navigation)', () => {
     expect(screen.getByText('b-file.pdf')).toBeInTheDocument()
     expect(screen.queryByText('a-file.pdf')).not.toBeInTheDocument()
     expect(mockListDocuments.mock.calls.length).toBe(listCallsBefore)
+  })
+})
+
+// ── Workspace tabs ───────────────────────────────────────────────────────
+
+describe('Workspace tabs', () => {
+  it('renders three tab buttons', async () => {
+    mockListDocuments.mockResolvedValue({ items: [SAMPLE_DOC] })
+    renderWorkspace()
+    await waitFor(() => {
+      expect(screen.getByText('report.pdf')).toBeInTheDocument()
+    })
+
+    expect(screen.getByRole('tab', { name: 'Documents' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Search' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Ask OpsFlow' })).toBeInTheDocument()
+  })
+
+  it('documents tab is active by default', async () => {
+    mockListDocuments.mockResolvedValue({ items: [SAMPLE_DOC] })
+    renderWorkspace()
+    await waitFor(() => {
+      expect(screen.getByText('report.pdf')).toBeInTheDocument()
+    })
+
+    expect(screen.getByRole('tab', { name: 'Documents' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
+  })
+
+  it('switching to Search tab shows SearchPanel', async () => {
+    const user = userEvent.setup()
+    mockListDocuments.mockResolvedValue({ items: [SAMPLE_DOC] })
+    renderWorkspace()
+    await waitFor(() => {
+      expect(screen.getByText('report.pdf')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('tab', { name: 'Search' }))
+
+    expect(screen.getByTestId('search-panel')).toBeInTheDocument()
+    expect(screen.queryByText('report.pdf')).not.toBeInTheDocument()
+  })
+
+  it('switching to Ask tab shows AskPanel', async () => {
+    const user = userEvent.setup()
+    mockListDocuments.mockResolvedValue({ items: [SAMPLE_DOC] })
+    renderWorkspace()
+    await waitFor(() => {
+      expect(screen.getByText('report.pdf')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('tab', { name: 'Ask OpsFlow' }))
+
+    expect(screen.getByTestId('ask-panel')).toBeInTheDocument()
+    expect(screen.queryByText('report.pdf')).not.toBeInTheDocument()
+  })
+
+  it('switching back to Documents tab shows document list', async () => {
+    const user = userEvent.setup()
+    mockListDocuments.mockResolvedValue({ items: [SAMPLE_DOC] })
+    renderWorkspace()
+    await waitFor(() => {
+      expect(screen.getByText('report.pdf')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('tab', { name: 'Ask OpsFlow' }))
+    expect(screen.queryByText('report.pdf')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: 'Documents' }))
+    expect(screen.getByText('report.pdf')).toBeInTheDocument()
+  })
+
+  it('passes projectId and documents to AskPanel', async () => {
+    const user = userEvent.setup()
+    mockListDocuments.mockResolvedValue({ items: [SAMPLE_DOC] })
+    renderWorkspace()
+    await waitFor(() => {
+      expect(screen.getByText('report.pdf')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('tab', { name: 'Ask OpsFlow' }))
+
+    const askPanel = screen.getByTestId('ask-panel')
+    expect(askPanel).toHaveAttribute('data-project-id', 'proj-1')
+    expect(askPanel).toHaveAttribute('data-doc-count', '1')
+  })
+
+  it('passes projectId and documents to SearchPanel', async () => {
+    const user = userEvent.setup()
+    mockListDocuments.mockResolvedValue({ items: [SAMPLE_DOC] })
+    renderWorkspace()
+    await waitFor(() => {
+      expect(screen.getByText('report.pdf')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('tab', { name: 'Search' }))
+
+    const searchPanel = screen.getByTestId('search-panel')
+    expect(searchPanel).toHaveAttribute('data-project-id', 'proj-1')
+    expect(searchPanel).toHaveAttribute('data-doc-count', '1')
+  })
+
+  it('tabs are not shown during loading', () => {
+    mockListDocuments.mockReturnValue(new Promise(() => {}))
+    renderWorkspace()
+
+    expect(screen.getByRole('tab', { name: 'Documents' })).toBeInTheDocument()
+    expect(screen.getByText('Loading documents…')).toBeInTheDocument()
+    expect(screen.queryByTestId('ask-panel')).not.toBeInTheDocument()
   })
 })

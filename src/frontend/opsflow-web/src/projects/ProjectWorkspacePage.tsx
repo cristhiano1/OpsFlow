@@ -7,6 +7,8 @@ import {
   uploadDocument,
   type DocumentResponse,
 } from './documentsApi'
+import { AskPanel } from './AskPanel'
+import { SearchPanel } from './SearchPanel'
 import './ProjectWorkspacePage.css'
 
 const ALLOWED_EXTENSIONS = new Set(['.txt', '.docx'])
@@ -23,6 +25,8 @@ type UploadState =
   | { status: 'uploading'; fileName: string }
   | { status: 'error'; message: string }
   | { status: 'success-refresh-failed' }
+
+type WorkspaceTab = 'documents' | 'search' | 'ask'
 
 function getFileExtension(name: string): string {
   const dot = name.lastIndexOf('.')
@@ -90,6 +94,7 @@ export function ProjectWorkspacePage() {
   const [uploadState, setUploadState] = useState<UploadState>({ status: 'idle' })
   const [clientError, setClientError] = useState<string | null>(null)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>('documents')
   const generationRef = useRef(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -205,112 +210,164 @@ export function ProjectWorkspacePage() {
         <span className="workspace-breadcrumb-sep" aria-hidden="true">
           /
         </span>
-        <span>Documents</span>
+        <span>Workspace</span>
       </nav>
 
-      <h2 className="workspace-heading">Documents</h2>
-
-      <form className="workspace-upload-form" onSubmit={handleUpload}>
-        <div className="workspace-upload-field">
-          <label className="workspace-upload-label" htmlFor="document-file-input">
-            Choose file
-          </label>
-          <input
-            id="document-file-input"
-            ref={fileInputRef}
-            type="file"
-            accept=".txt,.docx"
-            className="workspace-upload-input"
-            disabled={uploading}
-            onChange={handleFileChange}
-          />
-        </div>
-        {clientError && (
-          <div className="workspace-upload-client-error" role="alert">
-            {clientError}
-          </div>
-        )}
+      <div className="workspace-tabs" role="tablist" aria-label="Workspace sections">
         <button
-          type="submit"
-          className="workspace-upload-submit"
-          disabled={!selectedFile || uploading}
+          role="tab"
+          aria-selected={activeTab === 'documents'}
+          aria-controls="panel-documents"
+          className={`workspace-tab${activeTab === 'documents' ? ' workspace-tab-active' : ''}`}
+          onClick={() => setActiveTab('documents')}
         >
-          {uploading ? `Uploading ${uploadState.fileName}…` : 'Upload'}
+          Documents
         </button>
-      </form>
-
-      <div aria-live="polite" className="workspace-upload-status">
-        {uploading && (
-          <p className="workspace-status-msg">
-            Uploading {uploadState.fileName}…
-          </p>
-        )}
-        {uploadState.status === 'error' && (
-          <div className="workspace-upload-error" role="alert">
-            {uploadState.message}
-          </div>
-        )}
-        {uploadState.status === 'success-refresh-failed' && (
-          <div className="workspace-upload-warn">
-            Upload succeeded, but the document list could not be refreshed.
-            <button
-              type="button"
-              className="workspace-retry-button"
-              onClick={handleRetryRefresh}
-            >
-              Retry
-            </button>
-          </div>
-        )}
+        <button
+          role="tab"
+          aria-selected={activeTab === 'search'}
+          aria-controls="panel-search"
+          className={`workspace-tab${activeTab === 'search' ? ' workspace-tab-active' : ''}`}
+          onClick={() => setActiveTab('search')}
+        >
+          Search
+        </button>
+        <button
+          role="tab"
+          aria-selected={activeTab === 'ask'}
+          aria-controls="panel-ask"
+          className={`workspace-tab${activeTab === 'ask' ? ' workspace-tab-active' : ''}`}
+          onClick={() => setActiveTab('ask')}
+        >
+          Ask OpsFlow
+        </button>
       </div>
 
-      {pageState.status === 'loading' && (
-        <p className="workspace-loading">Loading documents…</p>
-      )}
+      {activeTab === 'documents' && (
+        <div id="panel-documents" role="tabpanel">
+          <form className="workspace-upload-form" onSubmit={handleUpload}>
+            <div className="workspace-upload-field">
+              <label className="workspace-upload-label" htmlFor="document-file-input">
+                Choose file
+              </label>
+              <input
+                id="document-file-input"
+                ref={fileInputRef}
+                type="file"
+                accept=".txt,.docx"
+                className="workspace-upload-input"
+                disabled={uploading}
+                onChange={handleFileChange}
+              />
+            </div>
+            {clientError && (
+              <div className="workspace-upload-client-error" role="alert">
+                {clientError}
+              </div>
+            )}
+            <button
+              type="submit"
+              className="workspace-upload-submit"
+              disabled={!selectedFile || uploading}
+            >
+              {uploading ? `Uploading ${uploadState.fileName}…` : 'Upload'}
+            </button>
+          </form>
 
-      {pageState.status === 'error' && (
-        <div className="workspace-error">
-          <p>{pageState.message}</p>
-          <button
-            type="button"
-            className="workspace-retry-button"
-            onClick={handleRetryLoad}
-          >
-            Retry
-          </button>
-        </div>
-      )}
-
-      {pageState.status === 'not-found' && (
-        <div className="workspace-not-found">
-          <p>Project not found.</p>
-          <Link to="/projects" className="workspace-back-link">
-            Back to Projects
-          </Link>
-        </div>
-      )}
-
-      {pageState.status === 'loaded' && pageState.documents.length === 0 && (
-        <p className="workspace-empty">No documents yet. Upload one above.</p>
-      )}
-
-      {pageState.status === 'loaded' && pageState.documents.length > 0 && (
-        <ul className="workspace-document-list">
-          {pageState.documents.map((doc) => (
-            <li key={doc.id} className="workspace-document-item">
-              <p className="workspace-document-name">{doc.originalFileName}</p>
-              <p className="workspace-document-meta">
-                <span className="workspace-document-type">
-                  {formatContentType(doc.contentType)}
-                </span>
-                <span className="workspace-document-sep" aria-hidden="true">·</span>
-                {formatFileSize(doc.sizeBytes)}
-                <span className="workspace-document-sep" aria-hidden="true">·</span>
-                <time dateTime={doc.createdAt}>{formatDate(doc.createdAt)}</time>
+          <div aria-live="polite" className="workspace-upload-status">
+            {uploading && (
+              <p className="workspace-status-msg">
+                Uploading {uploadState.fileName}…
               </p>
-            </li>
-          ))}
-        </ul>
+            )}
+            {uploadState.status === 'error' && (
+              <div className="workspace-upload-error" role="alert">
+                {uploadState.message}
+              </div>
+            )}
+            {uploadState.status === 'success-refresh-failed' && (
+              <div className="workspace-upload-warn">
+                Upload succeeded, but the document list could not be refreshed.
+                <button
+                  type="button"
+                  className="workspace-retry-button"
+                  onClick={handleRetryRefresh}
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+          </div>
+
+          {pageState.status === 'loading' && (
+            <p className="workspace-loading">Loading documents…</p>
+          )}
+
+          {pageState.status === 'error' && (
+            <div className="workspace-error">
+              <p>{pageState.message}</p>
+              <button
+                type="button"
+                className="workspace-retry-button"
+                onClick={handleRetryLoad}
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
+          {pageState.status === 'not-found' && (
+            <div className="workspace-not-found">
+              <p>Project not found.</p>
+              <Link to="/projects" className="workspace-back-link">
+                Back to Projects
+              </Link>
+            </div>
+          )}
+
+          {pageState.status === 'loaded' && pageState.documents.length === 0 && (
+            <p className="workspace-empty">No documents yet. Upload one above.</p>
+          )}
+
+          {pageState.status === 'loaded' && pageState.documents.length > 0 && (
+            <ul className="workspace-document-list">
+              {pageState.documents.map((doc) => (
+                <li key={doc.id} className="workspace-document-item">
+                  <p className="workspace-document-name">{doc.originalFileName}</p>
+                  <p className="workspace-document-meta">
+                    <span className="workspace-document-type">
+                      {formatContentType(doc.contentType)}
+                    </span>
+                    <span className="workspace-document-sep" aria-hidden="true">&middot;</span>
+                    {formatFileSize(doc.sizeBytes)}
+                    <span className="workspace-document-sep" aria-hidden="true">&middot;</span>
+                    <time dateTime={doc.createdAt}>{formatDate(doc.createdAt)}</time>
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'search' && (
+        <div id="panel-search" role="tabpanel">
+          {pageState.status === 'loaded' ? (
+            <SearchPanel projectId={projectId} documents={pageState.documents} />
+          ) : pageState.status === 'loading' ? (
+            <p className="workspace-loading">Loading documents…</p>
+          ) : null}
+        </div>
+      )}
+
+      {activeTab === 'ask' && (
+        <div id="panel-ask" role="tabpanel">
+          {pageState.status === 'loaded' ? (
+            <AskPanel projectId={projectId} documents={pageState.documents} />
+          ) : pageState.status === 'loading' ? (
+            <p className="workspace-loading">Loading documents…</p>
+          ) : null}
+        </div>
       )}
     </div>
   )
