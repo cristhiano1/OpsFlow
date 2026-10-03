@@ -243,6 +243,32 @@ export function ProjectWorkspacePage() {
         </button>
       </div>
 
+      {pageState.status === 'loading' && (
+        <p className="workspace-loading">Loading documents…</p>
+      )}
+
+      {pageState.status === 'error' && (
+        <div className="workspace-error">
+          <p>{pageState.message}</p>
+          <button
+            type="button"
+            className="workspace-retry-button"
+            onClick={handleRetryLoad}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {pageState.status === 'not-found' && (
+        <div className="workspace-not-found">
+          <p>Project not found.</p>
+          <Link to="/projects" className="workspace-back-link">
+            Back to Projects
+          </Link>
+        </div>
+      )}
+
       {activeTab === 'documents' && (
         <div id="panel-documents" role="tabpanel">
           <form className="workspace-upload-form" onSubmit={handleUpload}>
@@ -299,32 +325,6 @@ export function ProjectWorkspacePage() {
             )}
           </div>
 
-          {pageState.status === 'loading' && (
-            <p className="workspace-loading">Loading documents…</p>
-          )}
-
-          {pageState.status === 'error' && (
-            <div className="workspace-error">
-              <p>{pageState.message}</p>
-              <button
-                type="button"
-                className="workspace-retry-button"
-                onClick={handleRetryLoad}
-              >
-                Retry
-              </button>
-            </div>
-          )}
-
-          {pageState.status === 'not-found' && (
-            <div className="workspace-not-found">
-              <p>Project not found.</p>
-              <Link to="/projects" className="workspace-back-link">
-                Back to Projects
-              </Link>
-            </div>
-          )}
-
           {pageState.status === 'loaded' && pageState.documents.length === 0 && (
             <p className="workspace-empty">No documents yet. Upload one above.</p>
           )}
@@ -350,23 +350,15 @@ export function ProjectWorkspacePage() {
         </div>
       )}
 
-      {activeTab === 'search' && (
+      {activeTab === 'search' && pageState.status === 'loaded' && (
         <div id="panel-search" role="tabpanel">
-          {pageState.status === 'loaded' ? (
-            <SearchPanel projectId={projectId} documents={pageState.documents} />
-          ) : pageState.status === 'loading' ? (
-            <p className="workspace-loading">Loading documents…</p>
-          ) : null}
+          <SearchPanel projectId={projectId} documents={pageState.documents} />
         </div>
       )}
 
-      {activeTab === 'ask' && (
+      {activeTab === 'ask' && pageState.status === 'loaded' && (
         <div id="panel-ask" role="tabpanel">
-          {pageState.status === 'loaded' ? (
-            <AskPanel projectId={projectId} documents={pageState.documents} />
-          ) : pageState.status === 'loading' ? (
-            <p className="workspace-loading">Loading documents…</p>
-          ) : null}
+          <AskPanel projectId={projectId} documents={pageState.documents} />
         </div>
       )}
     </div>
