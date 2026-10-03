@@ -243,10 +243,6 @@ export function ProjectWorkspacePage() {
         </button>
       </div>
 
-      {pageState.status === 'loading' && (
-        <p className="workspace-loading">Loading documents…</p>
-      )}
-
       {pageState.status === 'error' && (
         <div className="workspace-error">
           <p>{pageState.message}</p>
@@ -325,6 +321,10 @@ export function ProjectWorkspacePage() {
             )}
           </div>
 
+          {pageState.status === 'loading' && (
+            <p className="workspace-loading">Loading documents…</p>
+          )}
+
           {pageState.status === 'loaded' && pageState.documents.length === 0 && (
             <p className="workspace-empty">No documents yet. Upload one above.</p>
           )}
@@ -350,15 +350,23 @@ export function ProjectWorkspacePage() {
         </div>
       )}
 
-      {activeTab === 'search' && pageState.status === 'loaded' && (
+      {activeTab === 'search' && (
         <div id="panel-search" role="tabpanel">
-          <SearchPanel projectId={projectId} documents={pageState.documents} />
+          {pageState.status === 'loaded' ? (
+            <SearchPanel projectId={projectId} documents={pageState.documents} />
+          ) : pageState.status === 'loading' ? (
+            <p className="workspace-loading">Loading documents…</p>
+          ) : null}
         </div>
       )}
 
-      {activeTab === 'ask' && pageState.status === 'loaded' && (
+      {activeTab === 'ask' && (
         <div id="panel-ask" role="tabpanel">
-          <AskPanel projectId={projectId} documents={pageState.documents} />
+          {pageState.status === 'loaded' ? (
+            <AskPanel projectId={projectId} documents={pageState.documents} />
+          ) : pageState.status === 'loading' ? (
+            <p className="workspace-loading">Loading documents…</p>
+          ) : null}
         </div>
       )}
     </div>
