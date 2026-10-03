@@ -1,0 +1,93 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "demo"
+        type: choice
+        options:
+          - demo
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: deploy-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  API_IMAGE: ghcr.io/${{ github.repository_owner }}/opsflow-api
+  WEB_IMAGE: ghcr.io/${{ github.repository_owner }}/opsflow-web
+
+jobs:
+  build-and-push:
+    name: Build & push images
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      api_image_ref: ${{ steps.refs.outputs.api }}
+      web_image_ref: ${{ steps.refs.outputs.web }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image references
+        id: refs
+        run: |
+          TAG="sha-${GITHUB_SHA::8}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "api=${{ env.API_IMAGE }}:$TAG" >> "$GITHUB_OUTPUT"
+          echo "web=${{ env.WEB_IMAGE }}:$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/backend/Dockerfile
+          push: true
+          tags: ${{ steps.refs.outputs.api }}
+
+      - name: Build & push Web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/frontend/Dockerfile
+          push: true
+          tags: ${{ steps.refs.outputs.web }}
+
+  deploy:
+    name: Deploy to ${{ github.event.inputs.environment }}
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: OPSFLOW_API_IMAGE,OPSFLOW_WEB_IMAGE
+          script: |
+            cd /opt/opsflow
+            export OPSFLOW_API_IMAGE="${OPSFLOW_API_IMAGE}"
+            export OPSFLOW_WEB_IMAGE="${OPSFLOW_WEB_IMAGE}"
+            docker compose -f docker-compose.yml -f docker-compose.production.yml pull api web
+            docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --no-build
+            docker compose -f docker-compose.yml -f docker-compose.production.yml ps
+        env:
+          OPSFLOW_API_IMAGE: ${{ needs.build-and-push.outputs.api_image_ref }}
+          OPSFLOW_WEB_IMAGE: ${{ needs.build-and-push.outputs.web_image_ref }}

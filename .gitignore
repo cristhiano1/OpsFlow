@@ -51,6 +51,7 @@ desktop.ini
 .env
 .env.*
 !.env.example
+!.env.production.example
 appsettings.*.local.json
 secrets.json
 **/wwwroot/uploads/
