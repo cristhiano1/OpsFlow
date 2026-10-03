@@ -1,16 +1,14 @@
 # =============================================================================
-# OpsFlow — local development infrastructure (Phase 0)
+# OpsFlow — containerized local stack
 #
-# Phase 0 provides only the database engine required to develop against a real
-# SQL Server 2025 instance. Application, frontend, Mailpit and background
-# services are introduced in later phases.
+# Start everything:
+#   docker compose up -d --build
 #
-# Usage (from the repository root):
+# Start only the database (non-containerized development):
 #   docker compose --env-file .env.example up -d sqlserver
-#   docker compose --env-file .env.example down        # keeps the data volume
 #
-# The SA password is never hardcoded here; it is read from the environment
-# (see .env.example / your local .env).
+# The SA password, JWT key, seed password, and provider credentials are never
+# hardcoded here; they are read from the environment (see .env.example / .env).
 # =============================================================================
 
 services:
@@ -28,12 +26,6 @@ services:
     volumes:
       - opsflow-sql-data-2025:/var/opt/mssql
     healthcheck:
-      # sqlcmd 18 ships in the 2025 image at /opt/mssql-tools18/bin.
-      # The password is passed through the SQLCMDPASSWORD environment variable
-      # rather than the -P flag, so it never appears in the container's process
-      # list. $$ escapes the variable so Compose passes it literally and the
-      # shell inside the container expands it against the container's environment.
-      # -C trusts the server's self-signed development certificate.
       test:
         - "CMD-SHELL"
         - "SQLCMDPASSWORD=\"$$MSSQL_SA_PASSWORD\" /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -Q \"SELECT 1\" -b -o /dev/null"
@@ -42,6 +34,67 @@ services:
       retries: 10
       start_period: 30s
 
+  api:
+    build:
+      context: .
+      dockerfile: src/backend/Dockerfile
+    container_name: opsflow-api
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      # The Compose stack is a local developer/demo environment by default so
+      # it can create deterministic demo accounts on a fresh SQL volume. Set
+      # ASPNETCORE_ENVIRONMENT=Production and SEED_ENABLED=false when using the
+      # image in a production-like environment.
+      ASPNETCORE_ENVIRONMENT: "${ASPNETCORE_ENVIRONMENT:-Development}"
+      ConnectionStrings__OpsFlow: "Server=sqlserver,1433;Database=OpsFlow;User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=True"
+      Jwt__SigningKey: "${JWT_SIGNING_KEY:?JWT_SIGNING_KEY must be set (see .env.example)}"
+      Jwt__Issuer: "OpsFlow"
+      Jwt__Audience: "OpsFlow.Api"
+      DocumentStorage__BasePath: "/app/storage"
+      Seed__Enabled: "${SEED_ENABLED:-true}"
+      Seed__DefaultPassword: "${SEED_DEFAULT_PASSWORD:?SEED_DEFAULT_PASSWORD must be set (see .env.example)}"
+      APPLY_MIGRATIONS: "${APPLY_MIGRATIONS:-true}"
+      OpenAI__ApiKey: "${OpenAI__ApiKey:-}"
+      OpenAI__EmbeddingModel: "${OpenAI__EmbeddingModel:-text-embedding-3-small}"
+      OpenAI__AnswerModel: "${OpenAI__AnswerModel:-gpt-4o-mini}"
+      BedrockReranker__Region: "${BedrockReranker__Region:-eu-central-1}"
+      BedrockReranker__ModelId: "${BedrockReranker__ModelId:-cohere.rerank-v3-5:0}"
+      BedrockReranker__TimeoutSeconds: "${BedrockReranker__TimeoutSeconds:-30}"
+      Reranking__ActivateInAnswerPath: "${Reranking__ActivateInAnswerPath:-false}"
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
+      AWS_SESSION_TOKEN: "${AWS_SESSION_TOKEN:-}"
+      AWS_REGION: "${AWS_REGION:-eu-central-1}"
+    volumes:
+      - opsflow-documents:/app/storage
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  web:
+    build:
+      context: .
+      dockerfile: src/frontend/Dockerfile
+    container_name: opsflow-web
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-3000}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:80/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
 volumes:
   opsflow-sql-data-2025:
     name: opsflow-sql-data-2025
+  opsflow-documents:
+    name: opsflow-documents

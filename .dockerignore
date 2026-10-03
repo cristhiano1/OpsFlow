@@ -18,3 +18,5 @@
 **/.env
 **/.env.*
 !.env.example
+tests/
+AUDIT-2026-10-01.md
