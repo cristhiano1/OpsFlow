@@ -1,16 +1,14 @@
 # =============================================================================
-# OpsFlow — local development infrastructure (Phase 0)
+# OpsFlow — containerized local stack
 #
-# Phase 0 provides only the database engine required to develop against a real
-# SQL Server 2025 instance. Application, frontend, Mailpit and background
-# services are introduced in later phases.
+# Start everything:
+#   docker compose up -d --build
 #
-# Usage (from the repository root):
+# Start only the database (non-containerized development):
 #   docker compose --env-file .env.example up -d sqlserver
-#   docker compose --env-file .env.example down        # keeps the data volume
 #
-# The SA password is never hardcoded here; it is read from the environment
-# (see .env.example / your local .env).
+# The SA password and JWT key are never hardcoded; they are read from the
+# environment (see .env.example / your local .env).
 # =============================================================================
 
 services:
@@ -42,6 +40,51 @@ services:
       retries: 10
       start_period: 30s
 
+  api:
+    build:
+      context: .
+      dockerfile: src/backend/Dockerfile
+    container_name: opsflow-api
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Production"
+      ConnectionStrings__OpsFlow: "Server=sqlserver,1433;Database=OpsFlow;User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=True"
+      Jwt__SigningKey: "${JWT_SIGNING_KEY:?JWT_SIGNING_KEY must be set (see .env.example)}"
+      Jwt__Issuer: "OpsFlow"
+      Jwt__Audience: "OpsFlow.Api"
+      DocumentStorage__BasePath: "/app/storage"
+      Seed__Enabled: "false"
+      APPLY_MIGRATIONS: "${APPLY_MIGRATIONS:-true}"
+    volumes:
+      - opsflow-documents:/app/storage
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  web:
+    build:
+      context: .
+      dockerfile: src/frontend/Dockerfile
+    container_name: opsflow-web
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-3000}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:80/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
 volumes:
   opsflow-sql-data-2025:
     name: opsflow-sql-data-2025
+  opsflow-documents:
+    name: opsflow-documents

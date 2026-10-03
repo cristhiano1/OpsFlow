@@ -36,9 +36,8 @@ upload workflows.
 **Major pieces not yet implemented:**
 
 - RAG question-answering UI (backend API exists; no frontend page yet)
-- Application Dockerfiles and container orchestration
 - Telemetry export (metrics instruments exist but no exporter is configured)
-- Production deployment infrastructure
+- Production cloud deployment infrastructure
 
 ## Architecture
 
@@ -215,7 +214,7 @@ and the two health endpoints require JWT Bearer authentication.
 OpsFlow/
 ├── .github/workflows/ci.yml              # CI pipeline (backend + frontend)
 ├── docs/
-│   └── architecture/decisions/            # 14 ADRs (ADR-001 through ADR-014)
+│   └── architecture/decisions/            # 15 ADRs (ADR-001 through ADR-015)
 ├── src/
 │   ├── backend/
 │   │   ├── OpsFlow.Api/                   # ASP.NET Core host, 5 controllers
@@ -232,8 +231,10 @@ OpsFlow/
 │   ├── OpsFlow.Api.IntegrationTests/      # API integration tests (Testcontainers)
 │   ├── OpsFlow.Evaluation/                # Retrieval evaluation framework
 │   └── OpsFlow.Evaluation.UnitTests/      # Evaluation metric tests
-├── docker/sqlserver-fts/                  # Custom SQL Server image (Full-Text)
-├── docker-compose.yml                     # Local SQL Server container
+├── docker/
+│   ├── nginx/default.conf                 # Nginx reverse proxy for frontend container
+│   └── sqlserver-fts/                     # Custom SQL Server image (Full-Text)
+├── docker-compose.yml                     # Full container stack (sqlserver, api, web)
 ├── Directory.Build.props                  # Shared C# build settings
 ├── Directory.Packages.props               # Central NuGet package versions
 ├── OpsFlow.sln
@@ -308,6 +309,45 @@ A PowerShell script automates the full local setup:
 It verifies prerequisites, starts SQL Server, launches the backend and frontend
 in separate terminals, and opens the browser.
 
+### Containerized stack
+
+Run the complete OpsFlow stack (SQL Server, backend API, frontend) in Docker:
+
+```bash
+cp .env.example .env   # edit .env with your values if needed
+docker compose up -d --build
+```
+
+| Service | Container | Port | Health |
+|---|---|---|---|
+| SQL Server | `opsflow-sqlserver` | `14330` (host) → `1433` | `sqlcmd SELECT 1` |
+| Backend API | `opsflow-api` | `8080` (internal) | `GET /health/ready` |
+| Frontend | `opsflow-web` | `3000` (host) → `80` | `GET /` |
+
+The frontend nginx proxy forwards `/api/*` and `/health/*` to the backend,
+preserving the same-origin topology required by the `SameSite=Strict` refresh
+cookie.
+
+**Dependency graph:** `sqlserver` (healthy) → `api` (healthy) → `web`
+
+**Persistent volumes:**
+
+| Volume | Purpose |
+|---|---|
+| `opsflow-sql-data-2025` | SQL Server data files |
+| `opsflow-documents` | Uploaded documents (`/app/storage`) |
+
+**Migration strategy:** The API applies EF Core migrations on startup when
+`APPLY_MIGRATIONS=true` (default in `docker-compose.yml`). This runs
+`MigrateAsync()` only — no seed data is created in Production mode.
+
+**Shutdown:**
+
+```bash
+docker compose down          # keeps volumes
+docker compose down -v       # removes volumes (fresh start)
+```
+
 ## Configuration
 
 The backend uses the following configuration sections (configured via user
@@ -379,6 +419,7 @@ Major technical decisions are documented as Architecture Decision Records in
 | [ADR-012](docs/architecture/decisions/ADR-012-grounded-rag-observability.md) | Grounded RAG observability |
 | [ADR-013](docs/architecture/decisions/ADR-013-endpoint-role-authorization.md) | Endpoint role authorization |
 | [ADR-014](docs/architecture/decisions/ADR-014-api-production-hardening.md) | API production hardening |
+| [ADR-015](docs/architecture/decisions/ADR-015-application-containerization.md) | Application containerization |
 
 ## Current limitations
 
@@ -386,8 +427,6 @@ The following are known gaps, documented here for transparency:
 
 - **No RAG answering UI** — the backend API is complete but the frontend does
   not yet have a page for asking questions or viewing grounded answers
-- **No application Dockerfiles** — Docker is used only for the SQL Server
-  development container; the backend and frontend have no container images
 - **No telemetry export** — metrics instruments are in place but no
   OpenTelemetry exporter or dashboard is configured
 - **No distributed tracing**
@@ -424,7 +463,9 @@ The following are known gaps, documented here for transparency:
   change
 - **Observability foundations** — privacy-safe metrics instrumentation ready
   for any OpenTelemetry-compatible backend
-- **Decision documentation** — 14 ADRs recording the rationale behind every
+- **Containerization** — multi-stage Docker images for backend and frontend
+  with nginx reverse proxy, health checks, and dependency-ordered startup
+- **Decision documentation** — 15 ADRs recording the rationale behind every
   major technical choice
 
 ## License

@@ -92,6 +92,7 @@ builder.Services.AddScoped(serviceProvider =>
 
 var app = builder.Build();
 
+await ApplyMigrationsIfRequestedAsync(app);
 await ApplyDevelopmentDataAsync(app);
 
 // HTTPS redirection is enforced only outside Development; local development is
@@ -127,6 +128,22 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
 app.MapControllers();
 
 app.Run();
+
+// Applies EF Core migrations when APPLY_MIGRATIONS=true. This is separate from
+// development seeding: it runs MigrateAsync only, with no seed data, so it is safe
+// for production-like container startup. Defaults to off; docker-compose.yml sets it.
+static async Task ApplyMigrationsIfRequestedAsync(WebApplication app)
+{
+    var apply = app.Configuration.GetValue<bool>("APPLY_MIGRATIONS");
+    if (!apply)
+    {
+        return;
+    }
+
+    using var scope = app.Services.CreateScope();
+    var database = scope.ServiceProvider.GetRequiredService<OpsFlowDbContext>();
+    await database.Database.MigrateAsync();
+}
 
 // Applies EF Core migrations and development seed data. Runs only when
 // (Development AND Seed:Enabled) OR the environment is Testing. Never in Production.
