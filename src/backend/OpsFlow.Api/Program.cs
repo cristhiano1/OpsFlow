@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Net;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -101,13 +100,10 @@ if (!builder.Environment.IsDevelopment())
         options.ForwardLimit = 1;
         options.KnownIPNetworks.Clear();
         options.KnownProxies.Clear();
-        var caddyNetwork = builder.Configuration["ForwardedHeaders:TrustedNetwork"];
-        if (!string.IsNullOrWhiteSpace(caddyNetwork))
+        var trustedProxy = builder.Configuration["ForwardedHeaders:TrustedProxy"];
+        if (!string.IsNullOrWhiteSpace(trustedProxy))
         {
-            var parts = caddyNetwork.Split('/');
-            options.KnownIPNetworks.Add(new System.Net.IPNetwork(
-                IPAddress.Parse(parts[0]),
-                int.Parse(parts[1], CultureInfo.InvariantCulture)));
+            options.KnownProxies.Add(IPAddress.Parse(trustedProxy));
         }
     });
 }

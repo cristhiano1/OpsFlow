@@ -58,14 +58,18 @@ adds complexity and latency with no benefit.
 
 ### Network isolation
 
-Two Docker networks enforce the principle of least connectivity:
+Two Docker networks with explicit IPAM enforce the principle of least
+connectivity:
 
-| Network | Services | Internet access |
-|---|---|---|
-| `public` | Caddy, API, nginx | Yes (via Caddy) |
-| `database` | API, SQL Server | No (internal) |
+| Network | Subnet | Services | Internet access |
+|---|---|---|---|
+| `opsflow-public` | `172.30.10.0/24` | Caddy (`172.30.10.10`), API, nginx | Yes (via Caddy) |
+| `opsflow-database` | Docker-assigned | API, SQL Server | No (internal) |
 
 Only Caddy publishes ports (80, 443). SQL Server is reachable only by the API.
+The public network uses a pinned IPAM subnet (`172.30.10.0/24`) and Caddy is
+assigned a deterministic IP (`172.30.10.10`) so the API's ForwardedHeaders
+middleware trusts only that specific address.
 
 ### Demo seeding
 
@@ -81,10 +85,21 @@ run as Development.
 
 ### ForwardedHeaders
 
-The API trusts `X-Forwarded-For` and `X-Forwarded-Proto` from the Caddy
-container network with `ForwardLimit=1`. The trusted network is configurable
-via `ForwardedHeaders:TrustedNetwork` (CIDR notation). This middleware runs
-only in non-Development environments and is placed first in the pipeline.
+The API trusts `X-Forwarded-For` and `X-Forwarded-Proto` from Caddy's
+deterministic IP (`172.30.10.10`) with `ForwardLimit=1`. The trusted proxy
+is configurable via `ForwardedHeaders:TrustedProxy` (a single IP address).
+Using `KnownProxies` with a single IP is narrower than trusting a CIDR range,
+blocking `X-Forwarded-For` spoofing from any other container on the network.
+This middleware runs only in non-Development environments and is placed first
+in the pipeline.
+
+### Image pinning
+
+Production services use GHCR images tagged with the exact commit SHA
+(`sha-<8chars>`). The deploy workflow builds, pushes, and exports the
+immutable image references (`OPSFLOW_API_IMAGE`, `OPSFLOW_WEB_IMAGE`) to the
+remote host. There is no `latest` tag dependency for deployment correctness —
+every deployment is traceable to a specific commit.
 
 ### Deployment gate
 
@@ -96,7 +111,13 @@ change.
 
 - Express edition is free for production use; no licensing cost
 - Single-hop proxy reduces configuration complexity and latency
-- Network isolation prevents direct database access from the internet
+- Network isolation with pinned IPAM prevents direct database access and
+  enables deterministic proxy trust
+- Deterministic Caddy IP (`172.30.10.10`) narrows ForwardedHeaders trust to a
+  single address, blocking X-Forwarded-For spoofing from other containers
+- Commit-SHA image tags ensure every deployment is traceable and reproducible
 - Demo seeding is explicit and separate from development seeding
 - Manual deployment gate prevents accidental production changes
+- All services restart automatically after crashes or host reboots
 - TLS is automatic via Caddy's ACME integration (Let's Encrypt)
+- Docker Compose >= 2.24.4 is required for `!override` tag support

@@ -10,17 +10,56 @@ Internet → Caddy :443 (TLS) → API :8080     (/api/*, /health/*)
            SQL Server Express :1433          (internal only, database network)
 ```
 
-- **Caddy** handles TLS termination (automatic Let's Encrypt) and proxies
-  API traffic directly to the .NET backend
+- **Caddy** (deterministic IP `172.30.10.10`) handles TLS termination
+  (automatic Let's Encrypt) and proxies API traffic directly to the .NET
+  backend — single proxy hop, no Caddy→nginx→API double hop
 - **nginx** serves the React SPA static files with SPA fallback
 - **SQL Server 2025 Express** is free for production use
 
+### Network topology
+
+| Network | Subnet | Services | Internet access |
+|---|---|---|---|
+| `opsflow-public` | `172.30.10.0/24` | Caddy (`172.30.10.10`), API, nginx | Yes (via Caddy) |
+| `opsflow-database` | Docker-assigned | API, SQL Server | No (internal) |
+
+Only Caddy publishes ports (80, 443). The API trusts forwarded headers only
+from `172.30.10.10` (Caddy's pinned IP) with `ForwardLimit=1`.
+
+### Image scheme
+
+Production deployments use GHCR images pinned to exact commit-SHA tags:
+
+```
+ghcr.io/<owner>/opsflow-api:sha-<8chars>
+ghcr.io/<owner>/opsflow-web:sha-<8chars>
+```
+
+The deploy workflow builds, pushes, and deploys the exact images for the
+selected commit. There is no `latest` tag dependency for deployment
+correctness.
+
 ## Prerequisites
 
-- Linux VPS with Docker and Docker Compose v2+
+- Linux VPS with Docker Engine 24+ and **Docker Compose >= 2.24.4**
+  (required for `!override` YAML tag support)
 - Domain name with DNS A record pointing to the VPS
 - Port 80 and 443 open (for Caddy's ACME challenge and HTTPS)
 - OpenAI API key (for embedding and RAG features)
+
+### Verify Docker Compose version
+
+```bash
+docker compose version
+# Must show >= 2.24.4
+```
+
+If the version is too old, update Docker Compose:
+
+```bash
+# Using Docker's official repository (Debian/Ubuntu):
+sudo apt-get update && sudo apt-get install docker-compose-plugin
+```
 
 ## Initial setup
 
@@ -46,11 +85,26 @@ Edit `.env` and replace every `CHANGE_ME` value:
 | `JWT_SIGNING_KEY` | `openssl rand -base64 32` |
 | `SEED_DEFAULT_PASSWORD` | Choose a password for demo accounts |
 | `OpenAI__ApiKey` | From [platform.openai.com](https://platform.openai.com) |
+| `OPSFLOW_API_IMAGE` | GHCR image ref (set by deploy workflow, or manually) |
+| `OPSFLOW_WEB_IMAGE` | GHCR image ref (set by deploy workflow, or manually) |
 
 ### 3. Start the stack
 
+For first-time setup (building images locally):
+
 ```bash
+# Set image refs for local build
+export OPSFLOW_API_IMAGE=opsflow-api:local
+export OPSFLOW_WEB_IMAGE=opsflow-web:local
 docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --build
+```
+
+For deployments using pre-built GHCR images (the normal path via the deploy
+workflow):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.production.yml pull api web
+docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --no-build
 ```
 
 Caddy will automatically obtain a TLS certificate from Let's Encrypt on the
@@ -88,8 +142,9 @@ All accounts use the password set in `SEED_DEFAULT_PASSWORD`.
 
 ### Via GitHub Actions
 
-Trigger the Deploy workflow from the Actions tab. It builds images, pushes
-to GHCR, and deploys via SSH.
+Trigger the Deploy workflow from the Actions tab. It builds images tagged with
+the exact commit SHA, pushes to GHCR, and deploys the pinned images via SSH.
+No `latest` tag is used for deployment correctness.
 
 ### Manual update
 
@@ -103,6 +158,16 @@ docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --bu
 The `restart` command does not respect `depends_on` health checks, which can
 cause the API to crash with "Database already exists" (Error 1801) if it starts
 before SQL Server is ready.
+
+### Restart behavior
+
+All long-running services (sqlserver, api, web, caddy) use
+`restart: unless-stopped`. This means:
+
+- Containers restart automatically after a crash or Docker daemon restart
+- Containers stay stopped only if you explicitly stop them with
+  `docker compose stop` or `docker compose down`
+- After a host reboot, Docker starts the daemon, which restarts the containers
 
 ## Backup and restore
 
