@@ -7,6 +7,7 @@ using OpsFlow.Api.Authentication;
 using OpsFlow.Api.Cors;
 using OpsFlow.Api.HealthChecks;
 using OpsFlow.Api.RateLimiting;
+using OpsFlow.Application.Abstractions;
 using OpsFlow.Application.Authentication;
 using OpsFlow.Application.Documents;
 using OpsFlow.Application.Projects;
@@ -26,6 +27,8 @@ builder.Services.AddOpsFlowCors(builder.Configuration);
 builder.Services.AddOpsFlowRateLimiting(builder.Configuration);
 builder.Services.AddHealthChecks()
     .AddCheck<SqlServerHealthCheck>("sqlserver", tags: ["ready"]);
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<ICallerContext, HttpCallerContext>();
 builder.Services.AddScoped<LoginService>();
 builder.Services.AddScoped<RefreshService>();
 builder.Services.AddScoped<LogoutService>();

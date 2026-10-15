@@ -57,6 +57,25 @@ public sealed class SeedingTests
         Assert.Equal(beforeUsers, afterUsers);
     }
 
+    [Fact]
+    public async Task Seeding_with_viewer_password_uses_separate_credential_for_viewer_account()
+    {
+        var defaultPassword = "Aa1!" + Guid.NewGuid().ToString("N");
+        var viewerPassword = "Vv2!" + Guid.NewGuid().ToString("N");
+        await using var provider = BuildProvider(defaultPassword, viewerPassword);
+
+        await RunSeederAsync(provider);
+
+        using var scope = provider.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+
+        var viewer = await users.FindByEmailAsync("viewer@opsflow.local");
+        Assert.NotNull(viewer);
+
+        Assert.True(await users.CheckPasswordAsync(viewer, viewerPassword));
+        Assert.False(await users.CheckPasswordAsync(viewer, defaultPassword));
+    }
+
     private async Task<int> CountSeedUsersAsync()
     {
         await using var db = _fixture.CreateContext();
@@ -71,7 +90,7 @@ public sealed class SeedingTests
         await seeder.SeedAsync();
     }
 
-    private ServiceProvider BuildProvider(string? defaultPassword)
+    private ServiceProvider BuildProvider(string? defaultPassword, string? viewerPassword = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -94,6 +113,7 @@ public sealed class SeedingTests
         {
             Enabled = true,
             DefaultPassword = defaultPassword,
+            ViewerPassword = viewerPassword,
         }));
         services.AddScoped<DevelopmentDataSeeder>();
 

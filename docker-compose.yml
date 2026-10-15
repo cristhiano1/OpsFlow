@@ -55,6 +55,7 @@ services:
       DocumentStorage__BasePath: "/app/storage"
       Seed__Enabled: "${SEED_ENABLED:-true}"
       Seed__DefaultPassword: "${SEED_DEFAULT_PASSWORD:?SEED_DEFAULT_PASSWORD must be set (see .env.example)}"
+      Seed__ViewerPassword: "${SEED_VIEWER_PASSWORD:-}"
       APPLY_MIGRATIONS: "${APPLY_MIGRATIONS:-true}"
       OpenAI__ApiKey: "${OpenAI__ApiKey:-}"
       OpenAI__EmbeddingModel: "${OpenAI__EmbeddingModel:-text-embedding-3-small}"

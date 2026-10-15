@@ -7,6 +7,7 @@ using OpsFlow.Application.Authorization;
 using OpsFlow.Domain.Organizations;
 using OpsFlow.Infrastructure.Configuration;
 using OpsFlow.Infrastructure.Identity;
+using OpsFlow.Infrastructure.Observability;
 using OpsFlow.Infrastructure.Persistence;
 
 namespace OpsFlow.Infrastructure.Seeding;
@@ -62,11 +63,16 @@ public sealed class DevelopmentDataSeeder
             return;
         }
 
-        await SeedUserAsync("admin@opsflow.local", "Alice Admin", northwind.Id, OpsFlowRoles.OrganizationAdministrator);
-        await SeedUserAsync("coordinator@opsflow.local", "Cora Coordinator", northwind.Id, OpsFlowRoles.Coordinator);
-        await SeedUserAsync("technician@opsflow.local", "Toby Technician", northwind.Id, OpsFlowRoles.Technician);
-        await SeedUserAsync("viewer@opsflow.local", "Vera Viewer", northwind.Id, OpsFlowRoles.Viewer);
-        await SeedUserAsync("admin@contoso.local", "Otto Admin", contoso.Id, OpsFlowRoles.OrganizationAdministrator);
+        var privilegedPassword = _options.DefaultPassword;
+        var viewerPassword = _options.ViewerPassword ?? privilegedPassword;
+
+        await SeedUserAsync("admin@opsflow.local", "Alice Admin", northwind.Id, OpsFlowRoles.OrganizationAdministrator, privilegedPassword);
+        await SeedUserAsync("coordinator@opsflow.local", "Cora Coordinator", northwind.Id, OpsFlowRoles.Coordinator, privilegedPassword);
+        await SeedUserAsync("technician@opsflow.local", "Toby Technician", northwind.Id, OpsFlowRoles.Technician, privilegedPassword);
+        await SeedUserAsync("viewer@opsflow.local", "Vera Viewer", northwind.Id, OpsFlowRoles.Viewer, viewerPassword);
+        await SeedUserAsync("admin@contoso.local", "Otto Admin", contoso.Id, OpsFlowRoles.OrganizationAdministrator, privilegedPassword);
+
+        await SeedRagMetricsAsync(northwind.Id, cancellationToken);
     }
 
     private async Task SeedRolesAsync()
@@ -104,7 +110,7 @@ public sealed class DevelopmentDataSeeder
         return organization;
     }
 
-    private async Task SeedUserAsync(string email, string displayName, Guid organizationId, string role)
+    private async Task SeedUserAsync(string email, string displayName, Guid organizationId, string role, string password)
     {
         var user = await _users.FindByEmailAsync(email);
         if (user is null)
@@ -121,7 +127,7 @@ public sealed class DevelopmentDataSeeder
                 CreatedAt = _clock.UtcNow,
             };
 
-            var createResult = await _users.CreateAsync(user, _options.DefaultPassword!);
+            var createResult = await _users.CreateAsync(user, password);
             EnsureSucceeded(createResult, $"create user '{email}'");
         }
 
@@ -130,6 +136,71 @@ public sealed class DevelopmentDataSeeder
             var roleResult = await _users.AddToRoleAsync(user, role);
             EnsureSucceeded(roleResult, $"assign role '{role}' to '{email}'");
         }
+    }
+
+    private async Task SeedRagMetricsAsync(Guid organizationId, CancellationToken cancellationToken)
+    {
+        if (await _db.RagMetricEntries.AnyAsync(m => m.OrganizationId == organizationId, cancellationToken))
+        {
+            return;
+        }
+
+        var rng = new Random(42);
+        var now = _clock.UtcNow;
+
+        for (var dayOffset = 29; dayOffset >= 0; dayOffset--)
+        {
+            var baseDate = now.AddDays(-dayOffset);
+            var queriesThisDay = rng.Next(3, 12);
+
+            for (var q = 0; q < queriesThisDay; q++)
+            {
+                var roll = rng.NextDouble();
+                string outcome;
+                string? failureCategory = null;
+
+                if (roll < 0.72)
+                {
+                    outcome = "Answered";
+                }
+                else if (roll < 0.88)
+                {
+                    outcome = "InsufficientEvidence";
+                }
+                else
+                {
+                    outcome = "Failed";
+                    var categories = new[] { "EmbeddingProviderFailure", "AnswerProviderFailure", "Internal" };
+                    failureCategory = categories[rng.Next(categories.Length)];
+                }
+
+                var totalDuration = 0.8 + (rng.NextDouble() * 3.2);
+                var retrievalDuration = 0.2 + (rng.NextDouble() * 1.0);
+                double? generationDuration = outcome == "Answered"
+                    ? 0.5 + (rng.NextDouble() * 2.0)
+                    : null;
+                int? evidenceCount = outcome != "Failed"
+                    ? rng.Next(2, 8)
+                    : null;
+
+                _db.RagMetricEntries.Add(new RagMetricEntry
+                {
+                    OrganizationId = organizationId,
+                    RecordedAt = baseDate.AddHours(rng.Next(8, 18)).AddMinutes(rng.Next(0, 60)),
+                    Outcome = outcome,
+                    RetrievalMode = outcome == "Failed" ? "NotApplicable" : "Hybrid",
+                    FailureCategory = failureCategory,
+                    SelectedEvidenceCount = evidenceCount,
+                    TotalDurationSeconds = Math.Round(totalDuration, 3),
+                    RetrievalDurationSeconds = Math.Round(retrievalDuration, 3),
+                    GenerationDurationSeconds = generationDuration.HasValue
+                        ? Math.Round(generationDuration.Value, 3)
+                        : null,
+                });
+            }
+        }
+
+        await _db.SaveChangesAsync(cancellationToken);
     }
 
     private static void EnsureSucceeded(IdentityResult result, string action)

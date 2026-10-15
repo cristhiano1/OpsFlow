@@ -13,6 +13,14 @@ public sealed class SeedOptions
     /// <summary>Whether seeding is enabled (only honored in Development).</summary>
     public bool Enabled { get; set; }
 
-    /// <summary>Password assigned to seeded development users. Never logged or returned.</summary>
+    /// <summary>Password assigned to privileged seeded users (admin, coordinator, technician). Never logged or returned.</summary>
     public string? DefaultPassword { get; set; }
+
+    /// <summary>
+    /// Password assigned to the read-only Viewer account. When set, the viewer
+    /// gets a separate credential so it can be shared publicly in a demo without
+    /// exposing privileged accounts.  Falls back to <see cref="DefaultPassword"/>
+    /// when not configured (development convenience).
+    /// </summary>
+    public string? ViewerPassword { get; set; }
 }
