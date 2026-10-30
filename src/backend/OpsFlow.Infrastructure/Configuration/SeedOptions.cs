@@ -17,10 +17,12 @@ public sealed class SeedOptions
     public string? DefaultPassword { get; set; }
 
     /// <summary>
-    /// Password assigned to the read-only Viewer account. When set, the viewer
-    /// gets a separate credential so it can be shared publicly in a demo without
-    /// exposing privileged accounts.  Falls back to <see cref="DefaultPassword"/>
-    /// when not configured (development convenience).
+    /// Password assigned to the read-only Viewer account, so it can be shared
+    /// publicly in a demo without exposing privileged accounts. Null, empty and
+    /// whitespace all mean "not configured". In Development seeding an unset
+    /// value falls back to <see cref="DefaultPassword"/>; public demo seeding
+    /// (<c>SEED_DEMO_DATA=true</c>) requires it. When set, it must always differ
+    /// from <see cref="DefaultPassword"/>.
     /// </summary>
     public string? ViewerPassword { get; set; }
 }

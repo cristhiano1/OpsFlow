@@ -46,9 +46,14 @@ public sealed class DevelopmentDataSeeder
         _logger = logger;
     }
 
-    /// <summary>Runs the seeding process. Idempotent.</summary>
-    public async Task SeedAsync(CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Runs the seeding process. Idempotent. Credentials are validated for
+    /// <paramref name="mode"/> before anything is written.
+    /// </summary>
+    public async Task SeedAsync(SeedMode mode = SeedMode.Development, CancellationToken cancellationToken = default)
     {
+        var credentials = SeedCredentials.Resolve(_options, mode);
+
         await SeedRolesAsync();
 
         var northwind = await SeedOrganizationAsync(
@@ -56,28 +61,19 @@ public sealed class DevelopmentDataSeeder
         var contoso = await SeedOrganizationAsync(
             ContosoId, "Contoso Operations", "contoso-operations", cancellationToken);
 
-        if (string.IsNullOrWhiteSpace(_options.DefaultPassword))
+        if (credentials is null)
         {
             _logger.LogWarning(
                 "Seed:DefaultPassword is not configured; skipping user seeding. Roles and organizations were seeded.");
             return;
         }
 
-        var privilegedPassword = _options.DefaultPassword;
-
-        if (_options.ViewerPassword is not null && _options.ViewerPassword == privilegedPassword)
-        {
-            throw new InvalidOperationException(
-                "Seed configuration error: Seed:ViewerPassword must differ from Seed:DefaultPassword. " +
-                "Using the same password for the viewer account and privileged accounts is not permitted.");
-        }
-
-        var viewerPassword = _options.ViewerPassword ?? privilegedPassword;
+        var privilegedPassword = credentials.PrivilegedPassword;
 
         await SeedUserAsync("admin@opsflow.local", "Alice Admin", northwind.Id, OpsFlowRoles.OrganizationAdministrator, privilegedPassword);
         await SeedUserAsync("coordinator@opsflow.local", "Cora Coordinator", northwind.Id, OpsFlowRoles.Coordinator, privilegedPassword);
         await SeedUserAsync("technician@opsflow.local", "Toby Technician", northwind.Id, OpsFlowRoles.Technician, privilegedPassword);
-        await SeedUserAsync("viewer@opsflow.local", "Vera Viewer", northwind.Id, OpsFlowRoles.Viewer, viewerPassword);
+        await SeedUserAsync("viewer@opsflow.local", "Vera Viewer", northwind.Id, OpsFlowRoles.Viewer, credentials.ViewerPassword);
         await SeedUserAsync("admin@contoso.local", "Otto Admin", contoso.Id, OpsFlowRoles.OrganizationAdministrator, privilegedPassword);
 
         await SeedRagMetricsAsync(northwind.Id, cancellationToken);

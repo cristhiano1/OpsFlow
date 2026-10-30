@@ -70,16 +70,33 @@ compatibility. Carries no user content, consistent with ADR-012.
 
 A single `GET /api/v1/analytics/summary` endpoint returns project counts,
 document counts, and aggregated RAG metrics scoped to the caller's
-organization. All authenticated users can access it — the data is already
-tenant-scoped and read-only.
+organization. Access requires the `AnalyticsRead` policy (Organization
+Administrator and Coordinator); Technician and Viewer receive 403. The
+organization is taken only from the caller's JWT claim. Outcome totals and
+averages are all-time; the daily trend covers the last 30 UTC calendar days
+(today and the previous 29), filtered before grouping, so sparse historical
+activity never appears in the chart.
+
+The frontend mirrors the policy for navigation only: Administrators and
+Coordinators land on the analytics dashboard, while Technicians and Viewers
+land on a role-appropriate welcome page and never call the analytics
+endpoint. The API remains the authority.
 
 ### Demo account security
 
 `SeedOptions` gains a `ViewerPassword` property. The `DevelopmentDataSeeder`
 uses `DefaultPassword` for privileged accounts (admin, coordinator,
-technician) and `ViewerPassword` for the read-only Viewer. When
-`ViewerPassword` is not configured it falls back to `DefaultPassword` for
-development convenience.
+technician) and `ViewerPassword` for the read-only Viewer. Null, empty and
+whitespace values all count as "not configured" (Docker Compose passes an
+unset variable through as an empty string).
+
+- **Development seeding** (Development + `Seed:Enabled`, or Testing): an
+  unset `ViewerPassword` falls back to `DefaultPassword` for convenience.
+- **Public demo seeding** (`SEED_DEMO_DATA=true` in Production): both
+  passwords are required. Seeding fails before writing anything if either is
+  missing.
+- In every mode, a `ViewerPassword` equal to `DefaultPassword` is rejected.
+  Error messages name the settings and never include password values.
 
 This ensures the public demo can share the Viewer credential without
 exposing privileged accounts.

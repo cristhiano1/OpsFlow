@@ -216,7 +216,7 @@ A retrieval evaluation framework supports offline quality measurement:
 | `api/v1/projects/{id}/documents/{id}/extraction` | GET | Get extraction |
 | `api/v1/projects/{id}/search` | POST | Hybrid chunk search |
 | `api/v1/projects/{id}/answer` | POST | RAG question answering |
-| `api/v1/analytics/summary` | GET | Organization dashboard analytics |
+| `api/v1/analytics/summary` | GET | Organization dashboard analytics (Administrator, Coordinator) |
 | `/health/live` | GET | Liveness probe (anonymous) |
 | `/health/ready` | GET | Readiness probe (anonymous) |
 
@@ -515,9 +515,11 @@ The following are known gaps, documented here for transparency:
 - **Observability foundations** — privacy-safe metrics instrumentation (BCL
   Meters) with SQL Server persistence and analytics dashboard; instruments
   are ready for any OpenTelemetry-compatible exporter
-- **Analytics dashboard** — organization-scoped dashboard showing project
-  and document counts, RAG pipeline health metrics, outcome breakdown, and
-  30-day daily trend; CSS-only visualizations, no external chart library
+- **Analytics dashboard** — organization-scoped dashboard for Administrators
+  and Coordinators showing project and document counts, RAG pipeline health
+  metrics, outcome breakdown, and 30-day daily trend; CSS-only visualizations,
+  no external chart library. Technicians and Viewers land on a role-appropriate
+  welcome page instead
 - **Demo security** — separate Viewer credential isolates the read-only demo
   account from privileged accounts; only the Viewer password is ever shared
   publicly

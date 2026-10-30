@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using OpsFlow.Api.RateLimiting;
+using OpsFlow.Application.Abstractions;
 using OpsFlow.Application.Authorization;
 using OpsFlow.Contracts.Analytics;
 using OpsFlow.Infrastructure.Persistence;
@@ -20,6 +21,7 @@ public sealed class AnalyticsController : ControllerBase
     [HttpGet("summary")]
     public async Task<IActionResult> GetSummaryAsync(
         [FromServices] OpsFlowDbContext db,
+        [FromServices] IClock clock,
         CancellationToken cancellationToken)
     {
         if (!TryGetOrganizationId(out var organizationId))
@@ -59,16 +61,7 @@ public sealed class AnalyticsController : ControllerBase
             .OrderByDescending(b => b.Count)
             .ToList();
 
-        var dailyTrend = metrics
-            .GroupBy(m => DateOnly.FromDateTime(m.RecordedAt.UtcDateTime.Date))
-            .OrderBy(g => g.Key)
-            .TakeLast(30)
-            .Select(g => new RagDailyTrend(
-                g.Key,
-                g.Count(),
-                g.Count(m => m.Outcome == "Answered"),
-                g.Count(m => m.Outcome == "Failed")))
-            .ToList();
+        var dailyTrend = AnalyticsDailyTrend.Build(metrics, clock.UtcNow);
 
         var ragSummary = new RagPipelineSummary(
             totalRequests,

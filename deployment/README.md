@@ -139,7 +139,11 @@ When `SEED_DEMO_DATA=true`, the following accounts are created idempotently:
 | `admin@opsflow.local` | Organization Administrator | Northwind Field Services |
 | `admin@contoso.local` | Organization Administrator | Contoso Operations |
 
-All accounts use the password set in `SEED_DEFAULT_PASSWORD`.
+`viewer@opsflow.local` uses `SEED_VIEWER_PASSWORD`, the only credential
+intended to be shared publicly. All other accounts use `SEED_DEFAULT_PASSWORD`.
+Demo seeding requires both values, and they must differ. Startup fails with a
+configuration error, before any data is written, if either is missing or
+blank or if they are equal.
 
 ## Updates
 

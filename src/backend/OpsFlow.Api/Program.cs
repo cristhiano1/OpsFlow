@@ -204,7 +204,7 @@ static async Task ApplyDemoDataIfRequestedAsync(WebApplication app)
 
     using var scope = app.Services.CreateScope();
     var seeder = scope.ServiceProvider.GetRequiredService<DevelopmentDataSeeder>();
-    await seeder.SeedAsync();
+    await seeder.SeedAsync(SeedMode.PublicDemo);
     app.Logger.LogInformation("Demo data seeded (SEED_DEMO_DATA=true)");
 }
 

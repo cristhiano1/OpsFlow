@@ -15,6 +15,8 @@ namespace OpsFlow.Api.IntegrationTests.Persistence;
 [Collection(SqlServerCollection.Name)]
 public sealed class SeedingTests
 {
+    private const string ViewerEmail = "viewer@opsflow.local";
+
     private readonly SqlServerFixture _fixture;
 
     public SeedingTests(SqlServerFixture fixture) => _fixture = fixture;
@@ -69,23 +71,53 @@ public sealed class SeedingTests
         Assert.DoesNotContain(sharedPassword, ex.Message);
     }
 
-    [Fact]
-    public async Task Seeding_with_viewer_password_uses_separate_credential_for_viewer_account()
+    [Theory]
+    [InlineData(SeedMode.Development)]
+    [InlineData(SeedMode.PublicDemo)]
+    public async Task Seeding_with_viewer_password_uses_separate_credential_for_viewer_account(SeedMode mode)
     {
         var defaultPassword = "Aa1!" + Guid.NewGuid().ToString("N");
         var viewerPassword = "Vv2!" + Guid.NewGuid().ToString("N");
         await using var provider = BuildProvider(defaultPassword, viewerPassword);
+        await DeleteViewerAsync(provider);
+
+        await RunSeederAsync(provider, mode);
+
+        Assert.True(await ViewerHasPasswordAsync(provider, viewerPassword));
+        Assert.False(await ViewerHasPasswordAsync(provider, defaultPassword));
+    }
+
+    // Docker Compose passes an unset SEED_VIEWER_PASSWORD through as "".
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task Development_seeding_with_blank_viewer_password_falls_back_to_default(string viewerPassword)
+    {
+        var defaultPassword = "Aa1!" + Guid.NewGuid().ToString("N");
+        await using var provider = BuildProvider(defaultPassword, viewerPassword);
+        await DeleteViewerAsync(provider);
 
         await RunSeederAsync(provider);
 
-        using var scope = provider.CreateScope();
-        var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+        Assert.True(await ViewerHasPasswordAsync(provider, defaultPassword));
+    }
 
-        var viewer = await users.FindByEmailAsync("viewer@opsflow.local");
-        Assert.NotNull(viewer);
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task Public_demo_seeding_without_viewer_password_fails_before_creating_users(string? viewerPassword)
+    {
+        var defaultPassword = "Aa1!" + Guid.NewGuid().ToString("N");
+        await using var provider = BuildProvider(defaultPassword, viewerPassword);
+        await DeleteViewerAsync(provider);
 
-        Assert.True(await users.CheckPasswordAsync(viewer, viewerPassword));
-        Assert.False(await users.CheckPasswordAsync(viewer, defaultPassword));
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => RunSeederAsync(provider, SeedMode.PublicDemo));
+
+        Assert.Contains("Seed:ViewerPassword is required", ex.Message);
+        Assert.DoesNotContain(defaultPassword, ex.Message);
+        Assert.False(await ViewerExistsAsync(provider));
     }
 
     private async Task<int> CountSeedUsersAsync()
@@ -95,11 +127,40 @@ public sealed class SeedingTests
             u.Email == "admin@opsflow.local" || u.Email == "admin@contoso.local");
     }
 
-    private static async Task RunSeederAsync(ServiceProvider provider)
+    private static async Task RunSeederAsync(ServiceProvider provider, SeedMode mode = SeedMode.Development)
     {
         using var scope = provider.CreateScope();
         var seeder = scope.ServiceProvider.GetRequiredService<DevelopmentDataSeeder>();
-        await seeder.SeedAsync();
+        await seeder.SeedAsync(mode);
+    }
+
+    // Seeding is idempotent and the database is shared across the collection, so an
+    // existing viewer would keep whichever password an earlier test gave it.
+    private static async Task DeleteViewerAsync(ServiceProvider provider)
+    {
+        using var scope = provider.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+        var viewer = await users.FindByEmailAsync(ViewerEmail);
+        if (viewer is not null)
+        {
+            Assert.True((await users.DeleteAsync(viewer)).Succeeded);
+        }
+    }
+
+    private static async Task<bool> ViewerExistsAsync(ServiceProvider provider)
+    {
+        using var scope = provider.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+        return await users.FindByEmailAsync(ViewerEmail) is not null;
+    }
+
+    private static async Task<bool> ViewerHasPasswordAsync(ServiceProvider provider, string password)
+    {
+        using var scope = provider.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+        var viewer = await users.FindByEmailAsync(ViewerEmail);
+        Assert.NotNull(viewer);
+        return await users.CheckPasswordAsync(viewer, password);
     }
 
     private ServiceProvider BuildProvider(string? defaultPassword, string? viewerPassword = null)

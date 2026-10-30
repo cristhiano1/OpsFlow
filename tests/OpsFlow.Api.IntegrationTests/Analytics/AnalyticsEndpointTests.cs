@@ -86,6 +86,26 @@ public sealed class AnalyticsEndpointTests : IDisposable
         await db.SaveChangesAsync();
     }
 
+    private async Task InsertMetricAtAsync(Guid organizationId, DateTimeOffset recordedAt)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<OpsFlowDbContext>();
+
+        db.RagMetricEntries.Add(new RagMetricEntry
+        {
+            OrganizationId = organizationId,
+            RecordedAt = recordedAt,
+            Outcome = "Answered",
+            RetrievalMode = "Hybrid",
+            TotalDurationSeconds = 1.0,
+            RetrievalDurationSeconds = 0.3,
+            GenerationDurationSeconds = 0.6,
+            SelectedEvidenceCount = 4,
+        });
+
+        await db.SaveChangesAsync();
+    }
+
     // ── tests ─────────────────────────────────────────────────────────────
 
     [Fact]
@@ -156,6 +176,31 @@ public sealed class AnalyticsEndpointTests : IDisposable
         Assert.NotNull(summary);
         Assert.Equal(7, summary.RagPipeline.TotalRequests);
         Assert.Equal(7, summary.RagPipeline.AnsweredCount);
+    }
+
+    [Fact]
+    public async Task Summary_daily_trend_excludes_activity_older_than_30_days_while_totals_stay_all_time()
+    {
+        var (token, orgId) = await SeedAndLoginAsync();
+        var now = DateTimeOffset.UtcNow;
+        await InsertMetricAtAsync(orgId, now.AddDays(-90));
+        await InsertMetricAtAsync(orgId, now.AddDays(-45));
+        await InsertMetricAtAsync(orgId, now.AddMinutes(-5));
+
+        var msg = new HttpRequestMessage(HttpMethod.Get, SummaryPath);
+        msg.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using var response = await _client.SendAsync(msg);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var summary = await response.Content.ReadFromJsonAsync<AnalyticsSummaryResponse>(
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        Assert.NotNull(summary);
+        Assert.Equal(3, summary.RagPipeline.TotalRequests);
+
+        var windowStart = DateOnly.FromDateTime(now.UtcDateTime).AddDays(-29);
+        var day = Assert.Single(summary.RagPipeline.DailyTrend);
+        Assert.True(day.Date >= windowStart);
+        Assert.Equal(1, day.Requests);
     }
 
     // ── RBAC enforcement ──────────────────────────────────────────────────
