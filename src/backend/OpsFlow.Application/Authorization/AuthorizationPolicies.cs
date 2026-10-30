@@ -23,4 +23,11 @@ public static class AuthorizationPolicies
     /// <see cref="OpsFlowRoles.Technician"/>.
     /// </summary>
     public const string DocumentContribute = "DocumentContribute";
+
+    /// <summary>
+    /// Read analytics and RAG pipeline metrics for the organization dashboard.
+    /// Allowed: <see cref="OpsFlowRoles.OrganizationAdministrator"/>,
+    /// <see cref="OpsFlowRoles.Coordinator"/>.
+    /// </summary>
+    public const string AnalyticsRead = "AnalyticsRead";
 }

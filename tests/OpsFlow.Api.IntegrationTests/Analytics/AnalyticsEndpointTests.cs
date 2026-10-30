@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using OpsFlow.Api.IntegrationTests.Authentication;
 using OpsFlow.Api.IntegrationTests.Infrastructure;
+using OpsFlow.Application.Authorization;
 using OpsFlow.Contracts.Analytics;
 using OpsFlow.Contracts.Authentication;
 using OpsFlow.Infrastructure.Observability;
@@ -155,5 +156,51 @@ public sealed class AnalyticsEndpointTests : IDisposable
         Assert.NotNull(summary);
         Assert.Equal(7, summary.RagPipeline.TotalRequests);
         Assert.Equal(7, summary.RagPipeline.AnsweredCount);
+    }
+
+    // ── RBAC enforcement ──────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Summary_admin_returns_200()
+    {
+        var (token, _) = await SeedAndLoginAsync(role: OpsFlowRoles.OrganizationAdministrator);
+
+        var msg = new HttpRequestMessage(HttpMethod.Get, SummaryPath);
+        msg.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using var response = await _client.SendAsync(msg);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Summary_coordinator_returns_200()
+    {
+        var (token, _) = await SeedAndLoginAsync(role: OpsFlowRoles.Coordinator);
+
+        var msg = new HttpRequestMessage(HttpMethod.Get, SummaryPath);
+        msg.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using var response = await _client.SendAsync(msg);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Summary_technician_returns_403()
+    {
+        var (token, _) = await SeedAndLoginAsync(role: OpsFlowRoles.Technician);
+
+        var msg = new HttpRequestMessage(HttpMethod.Get, SummaryPath);
+        msg.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using var response = await _client.SendAsync(msg);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Summary_viewer_returns_403()
+    {
+        var (token, _) = await SeedAndLoginAsync(role: OpsFlowRoles.Viewer);
+
+        var msg = new HttpRequestMessage(HttpMethod.Get, SummaryPath);
+        msg.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using var response = await _client.SendAsync(msg);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 }

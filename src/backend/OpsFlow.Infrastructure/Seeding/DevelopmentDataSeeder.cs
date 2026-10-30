@@ -64,6 +64,14 @@ public sealed class DevelopmentDataSeeder
         }
 
         var privilegedPassword = _options.DefaultPassword;
+
+        if (_options.ViewerPassword is not null && _options.ViewerPassword == privilegedPassword)
+        {
+            throw new InvalidOperationException(
+                "Seed configuration error: Seed:ViewerPassword must differ from Seed:DefaultPassword. " +
+                "Using the same password for the viewer account and privileged accounts is not permitted.");
+        }
+
         var viewerPassword = _options.ViewerPassword ?? privilegedPassword;
 
         await SeedUserAsync("admin@opsflow.local", "Alice Admin", northwind.Id, OpsFlowRoles.OrganizationAdministrator, privilegedPassword);

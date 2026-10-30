@@ -12,7 +12,7 @@ namespace OpsFlow.Api.Analytics;
 /// <summary>Serves analytics data for the organization dashboard.</summary>
 [ApiController]
 [Route("api/v1/analytics")]
-[Authorize]
+[Authorize(Policy = AuthorizationPolicies.AnalyticsRead)]
 [EnableRateLimiting(RateLimitPolicies.ApiStandard)]
 public sealed class AnalyticsController : ControllerBase
 {

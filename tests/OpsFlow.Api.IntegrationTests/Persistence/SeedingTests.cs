@@ -58,6 +58,18 @@ public sealed class SeedingTests
     }
 
     [Fact]
+    public async Task Seeding_with_same_viewer_and_default_password_throws_configuration_error()
+    {
+        var sharedPassword = "Aa1!" + Guid.NewGuid().ToString("N");
+        await using var provider = BuildProvider(sharedPassword, viewerPassword: sharedPassword);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => RunSeederAsync(provider));
+        Assert.Contains("ViewerPassword", ex.Message);
+        Assert.Contains("DefaultPassword", ex.Message);
+        Assert.DoesNotContain(sharedPassword, ex.Message);
+    }
+
+    [Fact]
     public async Task Seeding_with_viewer_password_uses_separate_credential_for_viewer_account()
     {
         var defaultPassword = "Aa1!" + Guid.NewGuid().ToString("N");
