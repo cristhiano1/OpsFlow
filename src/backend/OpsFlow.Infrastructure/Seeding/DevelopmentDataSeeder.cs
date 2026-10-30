@@ -14,13 +14,16 @@ namespace OpsFlow.Infrastructure.Seeding;
 
 /// <summary>
 /// Creates deterministic, idempotent development/test data: the four roles, two
-/// organizations and a small set of users. Safe to run repeatedly. The seed
-/// password is never logged.
+/// organizations and a small set of users. Safe to run repeatedly. The configured
+/// passwords are authoritative for the seeded accounts: an existing account whose
+/// password differs is updated (rotating its security stamp). Passwords are
+/// never logged.
 /// </summary>
 public sealed class DevelopmentDataSeeder
 {
     private static readonly Guid NorthwindId = new("11111111-1111-1111-1111-111111111111");
     private static readonly Guid ContosoId = new("22222222-2222-2222-2222-222222222222");
+    private const string ViewerEmail = "viewer@opsflow.local";
 
     private readonly OpsFlowDbContext _db;
     private readonly UserManager<ApplicationUser> _users;
@@ -54,6 +57,11 @@ public sealed class DevelopmentDataSeeder
     {
         var credentials = SeedCredentials.Resolve(_options, mode);
 
+        if (mode == SeedMode.PublicDemo && credentials is not null)
+        {
+            await EnsureViewerDoesNotHoldPrivilegedPasswordAsync(credentials.PrivilegedPassword);
+        }
+
         await SeedRolesAsync();
 
         var northwind = await SeedOrganizationAsync(
@@ -73,7 +81,7 @@ public sealed class DevelopmentDataSeeder
         await SeedUserAsync("admin@opsflow.local", "Alice Admin", northwind.Id, OpsFlowRoles.OrganizationAdministrator, privilegedPassword);
         await SeedUserAsync("coordinator@opsflow.local", "Cora Coordinator", northwind.Id, OpsFlowRoles.Coordinator, privilegedPassword);
         await SeedUserAsync("technician@opsflow.local", "Toby Technician", northwind.Id, OpsFlowRoles.Technician, privilegedPassword);
-        await SeedUserAsync("viewer@opsflow.local", "Vera Viewer", northwind.Id, OpsFlowRoles.Viewer, credentials.ViewerPassword);
+        await SeedUserAsync(ViewerEmail, "Vera Viewer", northwind.Id, OpsFlowRoles.Viewer, credentials.ViewerPassword);
         await SeedUserAsync("admin@contoso.local", "Otto Admin", contoso.Id, OpsFlowRoles.OrganizationAdministrator, privilegedPassword);
 
         await SeedRagMetricsAsync(northwind.Id, cancellationToken);
@@ -134,11 +142,57 @@ public sealed class DevelopmentDataSeeder
             var createResult = await _users.CreateAsync(user, password);
             EnsureSucceeded(createResult, $"create user '{email}'");
         }
+        else
+        {
+            await EnsurePasswordAsync(user, email, password);
+        }
 
         if (!await _users.IsInRoleAsync(user, role))
         {
             var roleResult = await _users.AddToRoleAsync(user, role);
             EnsureSucceeded(roleResult, $"assign role '{role}' to '{email}'");
+        }
+    }
+
+    // Configuration is authoritative for seeded accounts, so an existing database
+    // picks up rotated or newly separated credentials.
+    private async Task EnsurePasswordAsync(ApplicationUser user, string email, string password)
+    {
+        if (await _users.CheckPasswordAsync(user, password))
+        {
+            return;
+        }
+
+        foreach (var validator in _users.PasswordValidators)
+        {
+            EnsureSucceeded(
+                await validator.ValidateAsync(_users, user, password),
+                $"validate the configured password for '{email}'");
+        }
+
+        // A single update writes the new hash and a rotated security stamp, which
+        // revokes access and refresh tokens issued under the previous password.
+        user.PasswordHash = _users.PasswordHasher.HashPassword(user, password);
+        EnsureSucceeded(await _users.UpdateSecurityStampAsync(user), $"update the password for '{email}'");
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation("Updated the password of seeded account {Email} to match configuration", email);
+        }
+    }
+
+    // Before separate viewer credentials existed, every seeded account (the public
+    // Viewer included) used Seed:DefaultPassword. Refuse to keep that password for
+    // privileged accounts when it may already have been published.
+    private async Task EnsureViewerDoesNotHoldPrivilegedPasswordAsync(string privilegedPassword)
+    {
+        var viewer = await _users.FindByEmailAsync(ViewerEmail);
+        if (viewer is not null && await _users.CheckPasswordAsync(viewer, privilegedPassword))
+        {
+            throw new InvalidOperationException(
+                $"Seed configuration error: the existing {ViewerEmail} account still accepts Seed:DefaultPassword, " +
+                "so that password may already have been shared publicly. Choose a new Seed:DefaultPassword " +
+                "(SEED_DEFAULT_PASSWORD) and run demo seeding again; seeded accounts are then updated to the " +
+                "configured passwords.");
         }
     }
 

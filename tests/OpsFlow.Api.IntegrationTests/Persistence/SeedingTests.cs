@@ -120,6 +120,45 @@ public sealed class SeedingTests
         Assert.False(await ViewerExistsAsync(provider));
     }
 
+    // Upgrading a database seeded before separate viewer credentials existed, when
+    // every account (the public Viewer included) shared Seed:DefaultPassword.
+    [Fact]
+    public async Task Public_demo_upgrade_requires_rotating_the_formerly_shared_password_then_separates_accounts()
+    {
+        var legacyShared = "Aa1!" + Guid.NewGuid().ToString("N");
+        var privileged = "Pp3!" + Guid.NewGuid().ToString("N");
+        var viewerPassword = "Vv2!" + Guid.NewGuid().ToString("N");
+
+        await using (var legacy = BuildProvider(legacyShared))
+        {
+            await RunSeederAsync(legacy);
+            Assert.True(await ViewerHasPasswordAsync(legacy, legacyShared));
+        }
+
+        await using (var sameDefault = BuildProvider(legacyShared, viewerPassword))
+        {
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => RunSeederAsync(sameDefault, SeedMode.PublicDemo));
+            Assert.Contains("Choose a new Seed:DefaultPassword", ex.Message);
+            Assert.DoesNotContain(legacyShared, ex.Message);
+            Assert.True(await ViewerHasPasswordAsync(sameDefault, legacyShared));
+        }
+
+        await using var rotated = BuildProvider(privileged, viewerPassword);
+        await RunSeederAsync(rotated, SeedMode.PublicDemo);
+
+        Assert.True(await ViewerHasPasswordAsync(rotated, viewerPassword));
+        Assert.False(await ViewerHasPasswordAsync(rotated, legacyShared));
+
+        using var scope = rotated.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+        var admin = await users.FindByEmailAsync("admin@opsflow.local");
+        Assert.NotNull(admin);
+        Assert.True(await users.CheckPasswordAsync(admin, privileged));
+        Assert.False(await users.CheckPasswordAsync(admin, legacyShared));
+        Assert.False(await users.CheckPasswordAsync(admin, viewerPassword));
+    }
+
     private async Task<int> CountSeedUsersAsync()
     {
         await using var db = _fixture.CreateContext();

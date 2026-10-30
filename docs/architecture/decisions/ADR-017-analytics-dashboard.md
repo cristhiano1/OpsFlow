@@ -97,6 +97,15 @@ unset variable through as an empty string).
   missing.
 - In every mode, a `ViewerPassword` equal to `DefaultPassword` is rejected.
   Error messages name the settings and never include password values.
+- Configured passwords are authoritative for the seeded accounts. An existing
+  account whose password differs is updated in a single write, after the
+  Identity password validators pass. That write also rotates the security
+  stamp, revoking access and refresh tokens issued under the old password.
+- Databases seeded before this change gave the Viewer `DefaultPassword`, so
+  that password must be treated as public. Public demo seeding refuses to run
+  while the existing Viewer still accepts `DefaultPassword`, and instructs the
+  operator to choose a new one. Once rotated, the old shared password no
+  longer authenticates any seeded account.
 
 This ensures the public demo can share the Viewer credential without
 exposing privileged accounts.
