@@ -5,6 +5,7 @@ using OpsFlow.Domain.Documents;
 using OpsFlow.Domain.Organizations;
 using OpsFlow.Domain.Projects;
 using OpsFlow.Infrastructure.Identity;
+using OpsFlow.Infrastructure.Observability;
 
 namespace OpsFlow.Infrastructure.Persistence;
 
@@ -43,6 +44,9 @@ public class OpsFlowDbContext : IdentityDbContext<ApplicationUser, IdentityRole<
 
     /// <summary>Refresh tokens.</summary>
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+
+    /// <summary>Persisted RAG pipeline metrics for the analytics dashboard.</summary>
+    public DbSet<RagMetricEntry> RagMetricEntries => Set<RagMetricEntry>();
 
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder builder)

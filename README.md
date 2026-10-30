@@ -28,15 +28,20 @@ upload workflows.
 - Optional reranking via Amazon Bedrock (Cohere Rerank 3.5), config-gated
   (default OFF)
 - Grounded answer generation with structured citations and validation
-- RAG pipeline observability via BCL `System.Diagnostics.Metrics`
+- RAG pipeline observability via BCL `System.Diagnostics.Metrics` with SQL Server
+  persistence for historical querying
+- Organization analytics dashboard: project stats, document counts, RAG pipeline
+  metrics, success rates, performance breakdowns, and 30-day daily trends
 - RAG retrieval evaluation framework (MRR@K, NDCG@K, Recall@K)
 - React frontend with login, token refresh, project creation, document workspace,
-  grounded RAG question-answering with citations, and hybrid document search
+  grounded RAG question-answering with citations, hybrid document search, and
+  analytics dashboard
 - CI pipeline with backend and frontend gates on every push and PR
 
 **Major pieces not yet implemented:**
 
-- Telemetry export (metrics instruments exist but no exporter is configured)
+- Telemetry export (metrics instruments exist and are persisted, but no external
+  OpenTelemetry exporter is configured)
 
 ## Architecture
 
@@ -162,8 +167,15 @@ durations (retrieval, generation, end-to-end), and evidence volume. Telemetry
 measurements are privacy-safe by construction — the `GroundedAnswerMeasurement`
 record struct contains no string or identifier fields.
 
-No metrics exporter or dashboard is configured. The instruments are ready for
-any OpenTelemetry-compatible collector when one is added.
+Each `Record()` call is handled by a `PersistingGroundedAnswerTelemetry`
+decorator (see [ADR-017](docs/architecture/decisions/ADR-017-analytics-dashboard.md))
+which writes a bounded `RagMetricEntry` row to SQL Server for historical
+querying, then delegates to the inner `MeterGroundedAnswerTelemetry` for
+BCL metrics. Persistence failures are caught and logged — they never affect
+the answer pipeline.
+
+No external metrics exporter or distributed tracing backend is configured.
+The instruments are ready for any OpenTelemetry-compatible collector.
 
 ### Evaluation
 
@@ -185,6 +197,7 @@ A retrieval evaluation framework supports offline quality measurement:
 | Document upload and listing | Implemented |
 | Application shell with sidebar navigation | Implemented |
 | RAG question-answering UI | Implemented |
+| Analytics dashboard (stats, RAG metrics, daily trend) | Implemented |
 
 ### API endpoints
 
@@ -203,6 +216,7 @@ A retrieval evaluation framework supports offline quality measurement:
 | `api/v1/projects/{id}/documents/{id}/extraction` | GET | Get extraction |
 | `api/v1/projects/{id}/search` | POST | Hybrid chunk search |
 | `api/v1/projects/{id}/answer` | POST | RAG question answering |
+| `api/v1/analytics/summary` | GET | Organization dashboard analytics (Administrator, Coordinator) |
 | `/health/live` | GET | Liveness probe (anonymous) |
 | `/health/ready` | GET | Readiness probe (anonymous) |
 
@@ -222,7 +236,7 @@ OpsFlow/
 │   ├── .env.production.example           # Production env template
 │   └── README.md                         # Deployment guide
 ├── docs/
-│   └── architecture/decisions/            # 16 ADRs (ADR-001 through ADR-016)
+│   └── architecture/decisions/            # 17 ADRs (ADR-001 through ADR-017)
 ├── src/
 │   ├── backend/
 │   │   ├── OpsFlow.Api/                   # ASP.NET Core host, 5 controllers
@@ -460,13 +474,15 @@ Major technical decisions are documented as Architecture Decision Records in
 | [ADR-014](docs/architecture/decisions/ADR-014-api-production-hardening.md) | API production hardening |
 | [ADR-015](docs/architecture/decisions/ADR-015-application-containerization.md) | Application containerization |
 | [ADR-016](docs/architecture/decisions/ADR-016-production-demo-deployment.md) | Production demo deployment |
+| [ADR-017](docs/architecture/decisions/ADR-017-analytics-dashboard.md) | Analytics dashboard and metrics persistence |
 
 ## Current limitations
 
 The following are known gaps, documented here for transparency:
 
-- **No telemetry export** — metrics instruments are in place but no
-  OpenTelemetry exporter or dashboard is configured
+- **No external telemetry export** — metrics are persisted in SQL Server and
+  displayed in the analytics dashboard; no OpenTelemetry exporter or external
+  monitoring backend is configured
 - **No distributed tracing**
 - **No fine-grained permissions** — authorization uses four fixed roles with
   two coarse policies; there is no dynamic permission management UI or
@@ -496,14 +512,23 @@ The following are known gaps, documented here for transparency:
   evaluation layers; Testcontainers for database-realistic integration tests
 - **Continuous integration** — automated build, lint, and test gates on every
   change
-- **Observability foundations** — privacy-safe metrics instrumentation ready
-  for any OpenTelemetry-compatible backend
+- **Observability foundations** — privacy-safe metrics instrumentation (BCL
+  Meters) with SQL Server persistence and analytics dashboard; instruments
+  are ready for any OpenTelemetry-compatible exporter
+- **Analytics dashboard** — organization-scoped dashboard for Administrators
+  and Coordinators showing project and document counts, RAG pipeline health
+  metrics, outcome breakdown, and 30-day daily trend; CSS-only visualizations,
+  no external chart library. Technicians and Viewers land on a role-appropriate
+  welcome page instead
+- **Demo security** — separate Viewer credential isolates the read-only demo
+  account from privileged accounts; only the Viewer password is ever shared
+  publicly
 - **Containerization** — multi-stage Docker images for backend and frontend
   with nginx reverse proxy, health checks, and dependency-ordered startup
 - **Production deployment** — Caddy reverse proxy with automatic TLS, Docker
   network isolation, SQL Server Express licensing, ForwardedHeaders middleware,
   and manual deployment gate via GitHub Actions
-- **Decision documentation** — 16 ADRs recording the rationale behind every
+- **Decision documentation** — 17 ADRs recording the rationale behind every
   major technical choice
 
 ## License

@@ -70,12 +70,13 @@ public static class InfrastructureServiceCollectionExtensions
     }
 
     // Internal so the infrastructure unit tests can exercise it in isolation.
-    // Registers the BCL-metrics-backed grounded-answer telemetry sink behind the
-    // provider-neutral IGroundedAnswerTelemetry port. It creates instruments only;
-    // no exporter or external collector is required (see ADR-012).
+    // Registers BCL-metrics telemetry (singleton) and a scoped decorator that
+    // also persists each measurement to the database for the analytics dashboard.
+    // The Application layer sees only IGroundedAnswerTelemetry (see ADR-012).
     internal static void AddGroundedAnswerObservability(IServiceCollection services)
     {
-        services.AddSingleton<IGroundedAnswerTelemetry, MeterGroundedAnswerTelemetry>();
+        services.AddSingleton<MeterGroundedAnswerTelemetry>();
+        services.AddScoped<IGroundedAnswerTelemetry, PersistingGroundedAnswerTelemetry>();
     }
 
     // Internal so the infrastructure unit tests can exercise it without
