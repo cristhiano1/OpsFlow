@@ -1,5 +1,4 @@
 using OpsFlow.Api.Analytics;
-using OpsFlow.Infrastructure.Observability;
 
 namespace OpsFlow.Api.IntegrationTests.Analytics;
 
@@ -10,13 +9,32 @@ public sealed class AnalyticsDailyTrendTests
     private static readonly DateTimeOffset Now = new(2026, 10, 30, 14, 30, 0, TimeSpan.Zero);
     private static readonly DateOnly ExpectedWindowStart = new(2026, 10, 1);
 
-    private static RagMetricEntry Metric(DateTimeOffset recordedAt, string outcome = "Answered") =>
-        new() { RecordedAt = recordedAt, Outcome = outcome, RetrievalMode = "Hybrid" };
+    private static TrendPoint Metric(DateTimeOffset recordedAt, string outcome = "Answered") =>
+        new(recordedAt, outcome);
 
     [Fact]
     public void Window_start_is_today_minus_29_utc_days()
     {
         Assert.Equal(ExpectedWindowStart, AnalyticsDailyTrend.WindowStart(Now));
+        Assert.Equal(
+            new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero),
+            AnalyticsDailyTrend.WindowStartUtc(Now));
+    }
+
+    [Fact]
+    public void Future_metric_later_today_is_excluded()
+    {
+        var trend = AnalyticsDailyTrend.Build([Metric(Now.AddMinutes(1)), Metric(Now.AddHours(5))], Now);
+
+        Assert.Empty(trend);
+    }
+
+    [Fact]
+    public void Future_metric_on_a_later_day_is_excluded()
+    {
+        var trend = AnalyticsDailyTrend.Build([Metric(Now.AddDays(3))], Now);
+
+        Assert.Empty(trend);
     }
 
     [Fact]

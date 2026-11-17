@@ -73,9 +73,12 @@ document counts, and aggregated RAG metrics scoped to the caller's
 organization. Access requires the `AnalyticsRead` policy (Organization
 Administrator and Coordinator); Technician and Viewer receive 403. The
 organization is taken only from the caller's JWT claim. Outcome totals and
-averages are all-time; the daily trend covers the last 30 UTC calendar days
-(today and the previous 29), filtered before grouping, so sparse historical
-activity never appears in the chart.
+averages are all-time and aggregated in SQL: one `GROUP BY Outcome` query
+returns per-outcome counts, sums and non-null counts. Metric history is never
+loaded into the application. The daily trend covers the last 30 UTC calendar
+days (today and the previous 29). Its query reads only `(RecordedAt, Outcome)`
+for rows with `windowStart <= RecordedAt <= now`. Sparse historical activity
+and future timestamps therefore never appear in the chart.
 
 The frontend mirrors the policy for navigation only: Administrators and
 Coordinators land on the analytics dashboard, while Technicians and Viewers

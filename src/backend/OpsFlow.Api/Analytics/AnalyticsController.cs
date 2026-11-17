@@ -35,45 +35,8 @@ public sealed class AnalyticsController : ControllerBase
         var documentCount = await db.Documents
             .CountAsync(d => d.OrganizationId == organizationId, cancellationToken);
 
-        var metrics = await db.RagMetricEntries
-            .Where(m => m.OrganizationId == organizationId)
-            .ToListAsync(cancellationToken);
-
-        var totalRequests = metrics.Count;
-        var answeredCount = metrics.Count(m => m.Outcome == "Answered");
-        var insufficientCount = metrics.Count(m => m.Outcome == "InsufficientEvidence");
-        var failedCount = metrics.Count(m => m.Outcome == "Failed");
-
-        var avgDuration = totalRequests > 0
-            ? metrics.Average(m => m.TotalDurationSeconds) : 0;
-        var avgRetrievalDuration = totalRequests > 0
-            ? metrics.Average(m => m.RetrievalDurationSeconds) : 0;
-        var genMetrics = metrics.Where(m => m.GenerationDurationSeconds.HasValue).ToList();
-        double? avgGenerationDuration = genMetrics.Count > 0
-            ? genMetrics.Average(m => m.GenerationDurationSeconds!.Value) : null;
-        var evidenceMetrics = metrics.Where(m => m.SelectedEvidenceCount.HasValue).ToList();
-        var avgEvidence = evidenceMetrics.Count > 0
-            ? evidenceMetrics.Average(m => m.SelectedEvidenceCount!.Value) : 0;
-
-        var outcomeBreakdown = metrics
-            .GroupBy(m => m.Outcome)
-            .Select(g => new RagOutcomeBreakdown(g.Key, g.Count()))
-            .OrderByDescending(b => b.Count)
-            .ToList();
-
-        var dailyTrend = AnalyticsDailyTrend.Build(metrics, clock.UtcNow);
-
-        var ragSummary = new RagPipelineSummary(
-            totalRequests,
-            answeredCount,
-            insufficientCount,
-            failedCount,
-            Math.Round(avgDuration, 3),
-            Math.Round(avgRetrievalDuration, 3),
-            avgGenerationDuration.HasValue ? Math.Round(avgGenerationDuration.Value, 3) : null,
-            Math.Round(avgEvidence, 1),
-            outcomeBreakdown,
-            dailyTrend);
+        var ragSummary = await AnalyticsSummaryQuery.GetRagPipelineSummaryAsync(
+            db, organizationId, clock.UtcNow, cancellationToken);
 
         return Ok(new AnalyticsSummaryResponse(projectCount, documentCount, ragSummary));
     }

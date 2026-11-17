@@ -205,10 +205,11 @@ public sealed class DevelopmentDataSeeder
 
         var rng = new Random(42);
         var now = _clock.UtcNow;
+        var todayStart = new DateTimeOffset(now.UtcDateTime.Date, TimeSpan.Zero);
 
         for (var dayOffset = 29; dayOffset >= 0; dayOffset--)
         {
-            var baseDate = now.AddDays(-dayOffset);
+            var dayStart = todayStart.AddDays(-dayOffset);
             var queriesThisDay = rng.Next(3, 12);
 
             for (var q = 0; q < queriesThisDay; q++)
@@ -244,7 +245,7 @@ public sealed class DevelopmentDataSeeder
                 _db.RagMetricEntries.Add(new RagMetricEntry
                 {
                     OrganizationId = organizationId,
-                    RecordedAt = baseDate.AddHours(rng.Next(8, 18)).AddMinutes(rng.Next(0, 60)),
+                    RecordedAt = DemoTimestamp(dayStart, rng.Next(8, 18), rng.Next(0, 60), now),
                     Outcome = outcome,
                     RetrievalMode = outcome == "Failed" ? "NotApplicable" : "Hybrid",
                     FailureCategory = failureCategory,
@@ -259,6 +260,21 @@ public sealed class DevelopmentDataSeeder
         }
 
         await _db.SaveChangesAsync(cancellationToken);
+    }
+
+    // A business-hours time on dayStart's UTC date. Activity that would fall later than
+    // "now" (today only) is compressed into the part of today that has already elapsed.
+    private static DateTimeOffset DemoTimestamp(DateTimeOffset dayStart, int hour, int minute, DateTimeOffset now)
+    {
+        var candidate = dayStart.AddHours(hour).AddMinutes(minute);
+        if (candidate <= now)
+        {
+            return candidate;
+        }
+
+        var spanStart = (now - dayStart) >= TimeSpan.FromHours(8) ? dayStart.AddHours(8) : dayStart;
+        var fraction = (((hour - 8) * 60) + minute) / 600.0;
+        return spanStart + ((now - spanStart) * fraction);
     }
 
     private static void EnsureSucceeded(IdentityResult result, string action)

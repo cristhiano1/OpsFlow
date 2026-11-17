@@ -179,13 +179,14 @@ public sealed class AnalyticsEndpointTests : IDisposable
     }
 
     [Fact]
-    public async Task Summary_daily_trend_excludes_activity_older_than_30_days_while_totals_stay_all_time()
+    public async Task Summary_daily_trend_excludes_old_and_future_activity_while_totals_stay_all_time()
     {
         var (token, orgId) = await SeedAndLoginAsync();
         var now = DateTimeOffset.UtcNow;
         await InsertMetricAtAsync(orgId, now.AddDays(-90));
         await InsertMetricAtAsync(orgId, now.AddDays(-45));
         await InsertMetricAtAsync(orgId, now.AddMinutes(-5));
+        await InsertMetricAtAsync(orgId, now.AddDays(2));
 
         var msg = new HttpRequestMessage(HttpMethod.Get, SummaryPath);
         msg.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
@@ -195,7 +196,7 @@ public sealed class AnalyticsEndpointTests : IDisposable
         var summary = await response.Content.ReadFromJsonAsync<AnalyticsSummaryResponse>(
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
         Assert.NotNull(summary);
-        Assert.Equal(3, summary.RagPipeline.TotalRequests);
+        Assert.Equal(4, summary.RagPipeline.TotalRequests);
 
         var windowStart = DateOnly.FromDateTime(now.UtcDateTime).AddDays(-29);
         var day = Assert.Single(summary.RagPipeline.DailyTrend);
