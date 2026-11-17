@@ -147,14 +147,28 @@ blank or if they are equal.
 
 The configured passwords are authoritative for these seeded accounts. Re-running
 demo seeding updates any account whose password differs from its configured
-value and signs out that account's existing sessions.
+value and revokes that account's refresh tokens.
+
+Access tokens are validated by signature and lifetime only, so access tokens
+issued before a password change stay valid until they expire (15 minutes by
+default, `Jwt:AccessTokenLifetimeMinutes`). When demo seeding changes a
+password, it logs a warning reminding you to rotate `JWT_SIGNING_KEY`.
+Rotating the key invalidates every outstanding access token immediately.
+Users holding a valid refresh token get a new access token transparently;
+accounts whose password changed must sign in again.
 
 **Upgrading a demo seeded before separate viewer credentials existed.** In that
 setup every account, the public Viewer included, used `SEED_DEFAULT_PASSWORD`,
 so treat that password as public. Demo seeding refuses to run while the
-existing Viewer still accepts `SEED_DEFAULT_PASSWORD`. To upgrade, set a **new**
-`SEED_DEFAULT_PASSWORD` and a distinct `SEED_VIEWER_PASSWORD`, then run demo
-seeding once. The old password then stops working for every seeded account.
+existing Viewer still accepts `SEED_DEFAULT_PASSWORD`. To upgrade:
+
+1. Set a **new** `SEED_DEFAULT_PASSWORD` and a distinct `SEED_VIEWER_PASSWORD`.
+2. Set a **new** `JWT_SIGNING_KEY` (`openssl rand -base64 32`) so access
+   tokens obtained with the old password stop working.
+3. Run demo seeding once (`SEED_DEMO_DATA=true`), then set it back to `false`.
+
+Afterwards the old password no longer authenticates any seeded account, and
+no token obtained with it remains valid.
 
 ## Updates
 

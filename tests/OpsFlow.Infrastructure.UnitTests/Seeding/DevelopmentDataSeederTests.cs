@@ -2,6 +2,7 @@ using System.Globalization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using OpsFlow.Application.Abstractions;
 using OpsFlow.Infrastructure.Configuration;
@@ -147,6 +148,49 @@ public sealed class DevelopmentDataSeederTests
         Assert.True(await AcceptsAsync(PrivilegedEmails[0], privileged));
     }
 
+    [Fact]
+    public async Task PublicDemo_password_change_warns_to_rotate_the_signing_key_without_logging_passwords()
+    {
+        var legacyShared = NewPassword();
+        var privileged = NewPassword();
+        var viewer = NewPassword();
+        await SeedAsync(legacyShared, viewerPassword: null);
+        var logger = new CapturingLogger<DevelopmentDataSeeder>();
+
+        await SeedAsync(privileged, viewer, SeedMode.PublicDemo, logger: logger);
+
+        Assert.Contains(logger.Messages, m => m.Contains("Rotate Jwt:SigningKey", StringComparison.Ordinal));
+        Assert.All(logger.Messages, m =>
+        {
+            Assert.DoesNotContain(legacyShared, m, StringComparison.Ordinal);
+            Assert.DoesNotContain(privileged, m, StringComparison.Ordinal);
+            Assert.DoesNotContain(viewer, m, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public async Task PublicDemo_reseed_with_unchanged_passwords_does_not_warn()
+    {
+        var privileged = NewPassword();
+        var viewer = NewPassword();
+        await SeedAsync(privileged, viewer, SeedMode.PublicDemo);
+        var logger = new CapturingLogger<DevelopmentDataSeeder>();
+
+        await SeedAsync(privileged, viewer, SeedMode.PublicDemo, logger: logger);
+
+        Assert.DoesNotContain(logger.Messages, m => m.Contains("Rotate Jwt:SigningKey", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task PublicDemo_first_seed_of_a_fresh_database_does_not_warn()
+    {
+        var logger = new CapturingLogger<DevelopmentDataSeeder>();
+
+        await SeedAsync(NewPassword(), NewPassword(), SeedMode.PublicDemo, logger: logger);
+
+        Assert.DoesNotContain(logger.Messages, m => m.Contains("Rotate Jwt:SigningKey", StringComparison.Ordinal));
+    }
+
     // ── Demo metric timestamps ──────────────────────────────────────────
 
     [Theory]
@@ -233,9 +277,10 @@ public sealed class DevelopmentDataSeederTests
         string? viewerPassword,
         SeedMode mode = SeedMode.Development,
         DateTimeOffset? now = null,
-        string? databaseName = null)
+        string? databaseName = null,
+        CapturingLogger<DevelopmentDataSeeder>? logger = null)
     {
-        await using var provider = BuildProvider(defaultPassword, viewerPassword, now, databaseName);
+        await using var provider = BuildProvider(defaultPassword, viewerPassword, now, databaseName, logger);
         using var scope = provider.CreateScope();
         await scope.ServiceProvider.GetRequiredService<DevelopmentDataSeeder>().SeedAsync(mode);
     }
@@ -264,10 +309,15 @@ public sealed class DevelopmentDataSeederTests
         string? defaultPassword,
         string? viewerPassword,
         DateTimeOffset? now = null,
-        string? databaseName = null)
+        string? databaseName = null,
+        CapturingLogger<DevelopmentDataSeeder>? logger = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
+        if (logger is not null)
+        {
+            services.AddSingleton<ILogger<DevelopmentDataSeeder>>(logger);
+        }
         services.AddDbContext<OpsFlowDbContext>(options => options.UseInMemoryDatabase(databaseName ?? _databaseName));
 
         services.AddIdentityCore<ApplicationUser>(options =>

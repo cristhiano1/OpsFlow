@@ -16,8 +16,8 @@ namespace OpsFlow.Infrastructure.Seeding;
 /// Creates deterministic, idempotent development/test data: the four roles, two
 /// organizations and a small set of users. Safe to run repeatedly. The configured
 /// passwords are authoritative for the seeded accounts: an existing account whose
-/// password differs is updated (rotating its security stamp). Passwords are
-/// never logged.
+/// password differs is updated and its security stamp rotated, which revokes its
+/// refresh tokens. Passwords are never logged.
 /// </summary>
 public sealed class DevelopmentDataSeeder
 {
@@ -78,11 +78,24 @@ public sealed class DevelopmentDataSeeder
 
         var privilegedPassword = credentials.PrivilegedPassword;
 
-        await SeedUserAsync("admin@opsflow.local", "Alice Admin", northwind.Id, OpsFlowRoles.OrganizationAdministrator, privilegedPassword);
-        await SeedUserAsync("coordinator@opsflow.local", "Cora Coordinator", northwind.Id, OpsFlowRoles.Coordinator, privilegedPassword);
-        await SeedUserAsync("technician@opsflow.local", "Toby Technician", northwind.Id, OpsFlowRoles.Technician, privilegedPassword);
-        await SeedUserAsync(ViewerEmail, "Vera Viewer", northwind.Id, OpsFlowRoles.Viewer, credentials.ViewerPassword);
-        await SeedUserAsync("admin@contoso.local", "Otto Admin", contoso.Id, OpsFlowRoles.OrganizationAdministrator, privilegedPassword);
+        bool[] passwordsChanged =
+        [
+            await SeedUserAsync("admin@opsflow.local", "Alice Admin", northwind.Id, OpsFlowRoles.OrganizationAdministrator, privilegedPassword),
+            await SeedUserAsync("coordinator@opsflow.local", "Cora Coordinator", northwind.Id, OpsFlowRoles.Coordinator, privilegedPassword),
+            await SeedUserAsync("technician@opsflow.local", "Toby Technician", northwind.Id, OpsFlowRoles.Technician, privilegedPassword),
+            await SeedUserAsync(ViewerEmail, "Vera Viewer", northwind.Id, OpsFlowRoles.Viewer, credentials.ViewerPassword),
+            await SeedUserAsync("admin@contoso.local", "Otto Admin", contoso.Id, OpsFlowRoles.OrganizationAdministrator, privilegedPassword),
+        ];
+
+        // Access tokens are validated by signature and lifetime only, so the stamp
+        // rotation revokes refresh tokens but not access tokens that are already out.
+        if (mode == SeedMode.PublicDemo && passwordsChanged.Contains(true))
+        {
+            _logger.LogWarning(
+                "Seeded demo account passwords were changed and their refresh tokens revoked. Access tokens " +
+                "already issued stay valid until they expire (Jwt:AccessTokenLifetimeMinutes). Rotate " +
+                "Jwt:SigningKey (JWT_SIGNING_KEY) and restart the API to invalidate them immediately.");
+        }
 
         await SeedRagMetricsAsync(northwind.Id, cancellationToken);
     }
@@ -122,8 +135,10 @@ public sealed class DevelopmentDataSeeder
         return organization;
     }
 
-    private async Task SeedUserAsync(string email, string displayName, Guid organizationId, string role, string password)
+    // Returns true when an existing account's password was changed.
+    private async Task<bool> SeedUserAsync(string email, string displayName, Guid organizationId, string role, string password)
     {
+        var passwordChanged = false;
         var user = await _users.FindByEmailAsync(email);
         if (user is null)
         {
@@ -144,7 +159,7 @@ public sealed class DevelopmentDataSeeder
         }
         else
         {
-            await EnsurePasswordAsync(user, email, password);
+            passwordChanged = await EnsurePasswordAsync(user, email, password);
         }
 
         if (!await _users.IsInRoleAsync(user, role))
@@ -152,15 +167,17 @@ public sealed class DevelopmentDataSeeder
             var roleResult = await _users.AddToRoleAsync(user, role);
             EnsureSucceeded(roleResult, $"assign role '{role}' to '{email}'");
         }
+
+        return passwordChanged;
     }
 
     // Configuration is authoritative for seeded accounts, so an existing database
-    // picks up rotated or newly separated credentials.
-    private async Task EnsurePasswordAsync(ApplicationUser user, string email, string password)
+    // picks up rotated or newly separated credentials. Returns true when it changed one.
+    private async Task<bool> EnsurePasswordAsync(ApplicationUser user, string email, string password)
     {
         if (await _users.CheckPasswordAsync(user, password))
         {
-            return;
+            return false;
         }
 
         foreach (var validator in _users.PasswordValidators)
@@ -170,14 +187,16 @@ public sealed class DevelopmentDataSeeder
                 $"validate the configured password for '{email}'");
         }
 
-        // A single update writes the new hash and a rotated security stamp, which
-        // revokes access and refresh tokens issued under the previous password.
+        // A single update writes the new hash and a rotated security stamp. The stamp
+        // revokes refresh tokens; already-issued access tokens live until they expire.
         user.PasswordHash = _users.PasswordHasher.HashPassword(user, password);
         EnsureSucceeded(await _users.UpdateSecurityStampAsync(user), $"update the password for '{email}'");
         if (_logger.IsEnabled(LogLevel.Information))
         {
             _logger.LogInformation("Updated the password of seeded account {Email} to match configuration", email);
         }
+
+        return true;
     }
 
     // Before separate viewer credentials existed, every seeded account (the public

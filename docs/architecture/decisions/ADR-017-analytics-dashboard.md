@@ -103,12 +103,19 @@ unset variable through as an empty string).
 - Configured passwords are authoritative for the seeded accounts. An existing
   account whose password differs is updated in a single write, after the
   Identity password validators pass. That write also rotates the security
-  stamp, revoking access and refresh tokens issued under the old password.
+  stamp, which revokes the account's refresh tokens.
+- Access tokens are validated by signature and lifetime only. Per-request
+  security-stamp validation is not implemented. So access tokens issued
+  before a password change remain valid until they expire (15 minutes by
+  default). When public demo seeding changes any password it logs a warning
+  to rotate `Jwt:SigningKey`. The documented upgrade procedure rotates
+  `JWT_SIGNING_KEY`, which invalidates all outstanding access tokens.
 - Databases seeded before this change gave the Viewer `DefaultPassword`, so
   that password must be treated as public. Public demo seeding refuses to run
   while the existing Viewer still accepts `DefaultPassword`, and instructs the
-  operator to choose a new one. Once rotated, the old shared password no
-  longer authenticates any seeded account.
+  operator to choose a new one. Once rotated, together with the signing key,
+  the old shared password authenticates no seeded account and no token
+  obtained with it remains valid.
 
 This ensures the public demo can share the Viewer credential without
 exposing privileged accounts.
