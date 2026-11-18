@@ -1,5 +1,6 @@
 import { Outlet } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
+import { canViewAnalytics } from '../auth/roles'
 import { Sidebar } from './Sidebar'
 import './AuthenticatedShell.css'
 
@@ -27,7 +28,7 @@ export function AuthenticatedShell() {
         </div>
       </header>
       <div className="shell-body">
-        <Sidebar />
+        <Sidebar showAnalytics={canViewAnalytics(state.user.roles)} />
         <main className="shell-main">
           <Outlet />
         </main>

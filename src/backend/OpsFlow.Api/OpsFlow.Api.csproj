@@ -14,4 +14,7 @@
     <ProjectReference Include="..\OpsFlow.Contracts\OpsFlow.Contracts.csproj" />
     <ProjectReference Include="..\OpsFlow.Infrastructure\OpsFlow.Infrastructure.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="OpsFlow.Api.IntegrationTests" />
+  </ItemGroup>
 </Project>

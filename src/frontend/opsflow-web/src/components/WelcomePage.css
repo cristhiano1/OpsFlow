@@ -1,0 +1,79 @@
+.welcome-page {
+  max-width: 56rem;
+}
+
+.welcome-heading {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.welcome-intro {
+  margin: 0.5rem 0 0;
+  max-width: 40rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.welcome-features {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+  margin: 1.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.welcome-feature {
+  padding: 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+
+.welcome-feature-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.welcome-feature-description {
+  margin: 0.375rem 0 0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.welcome-next {
+  margin: 2rem 0 0;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.welcome-cta {
+  display: inline-block;
+  margin-top: 0.75rem;
+  padding: 0.5rem 1rem;
+  border-radius: 0.375rem;
+  background-color: var(--text);
+  color: var(--bg);
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.welcome-cta:hover {
+  opacity: 0.9;
+}
+
+.welcome-cta:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+
+@media (max-width: 48rem) {
+  .welcome-features {
+    grid-template-columns: 1fr;
+  }
+}

@@ -42,6 +42,12 @@ public static class AuthenticationServiceCollectionExtensions
                     OpsFlowRoles.OrganizationAdministrator,
                     OpsFlowRoles.Coordinator,
                     OpsFlowRoles.Technician));
+
+            options.AddPolicy(
+                AuthorizationPolicies.AnalyticsRead,
+                policy => policy.RequireRole(
+                    OpsFlowRoles.OrganizationAdministrator,
+                    OpsFlowRoles.Coordinator));
         });
 
         return services;

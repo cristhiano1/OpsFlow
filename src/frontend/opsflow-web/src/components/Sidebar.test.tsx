@@ -3,10 +3,10 @@ import { MemoryRouter } from 'react-router-dom'
 import { describe, it, expect } from 'vitest'
 import { Sidebar } from './Sidebar'
 
-function renderSidebar(initialEntries: string[] = ['/']) {
+function renderSidebar(initialEntries: string[] = ['/'], showAnalytics = true) {
   return render(
     <MemoryRouter initialEntries={initialEntries}>
-      <Sidebar />
+      <Sidebar showAnalytics={showAnalytics} />
     </MemoryRouter>,
   )
 }
@@ -19,11 +19,17 @@ describe('Sidebar', () => {
     ).toBeInTheDocument()
   })
 
-  it('renders Dashboard link pointing to /', () => {
+  it('renders Dashboard link pointing to / for analytics roles', () => {
     renderSidebar()
     const link = screen.getByRole('link', { name: 'Dashboard' })
     expect(link).toBeInTheDocument()
     expect(link).toHaveAttribute('href', '/')
+  })
+
+  it('labels / as Home and hides Dashboard for non-analytics roles', () => {
+    renderSidebar(['/'], false)
+    expect(screen.getByRole('link', { name: 'Home' })).toHaveAttribute('href', '/')
+    expect(screen.queryByRole('link', { name: 'Dashboard' })).not.toBeInTheDocument()
   })
 
   it('marks Dashboard as active when location is /', () => {
@@ -43,6 +49,11 @@ describe('Sidebar', () => {
     const link = screen.getByRole('link', { name: 'Projects' })
     expect(link).toBeInTheDocument()
     expect(link).toHaveAttribute('href', '/projects')
+  })
+
+  it('renders Projects link for non-analytics roles', () => {
+    renderSidebar(['/'], false)
+    expect(screen.getByRole('link', { name: 'Projects' })).toHaveAttribute('href', '/projects')
   })
 
   it('marks Projects as active when location is /projects', () => {

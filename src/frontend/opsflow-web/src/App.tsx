@@ -3,7 +3,7 @@ import { useAuth } from './auth/useAuth'
 import { ProtectedRoute } from './auth/ProtectedRoute'
 import { LoginPage } from './components/LoginPage'
 import { AuthenticatedShell } from './components/AuthenticatedShell'
-import { DashboardPage } from './components/DashboardPage'
+import { HomePage } from './components/HomePage'
 import { ProjectsPage } from './projects/ProjectsPage'
 import { ProjectWorkspacePage } from './projects/ProjectWorkspacePage'
 import { LoadingScreen } from './components/LoadingScreen'
@@ -36,7 +36,7 @@ function App() {
           </ProtectedRoute>
         }
       >
-        <Route index element={<DashboardPage />} />
+        <Route index element={<HomePage />} />
         <Route path="projects" element={<ProjectsPage />} />
         <Route path="projects/:projectId" element={<ProjectWorkspacePage />} />
       </Route>

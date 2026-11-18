@@ -35,6 +35,7 @@ services:
       ASPNETCORE_ENVIRONMENT: "Production"
       SEED_DEMO_DATA: "${SEED_DEMO_DATA:-false}"
       Seed__Enabled: "false"
+      Seed__ViewerPassword: "${SEED_VIEWER_PASSWORD:-}"
       Cors__AllowedOrigins__0: "https://${OPSFLOW_DOMAIN:?OPSFLOW_DOMAIN must be set}"
       ForwardedHeaders__TrustedProxy: "172.30.10.10"
     ports: !override []
